@@ -4,42 +4,63 @@ use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum VestingError {
-    #[msg("Unauthorized: Admin privilege required.")]
+    #[msg("Unauthorized access.")]
     Unauthorized, // 6000
+
     #[msg("Math operation overflow.")]
     MathOverflow, // 6001
-    #[msg("Timelock for hub update has not expired.")]
+
+    #[msg("Timelock has not expired yet.")]
     TimelockNotExpired, // 6002
-    #[msg("Invalid timestamp: Cliff must be before or at vesting start, and vesting start must be before vesting end.")]
+
+    #[msg("Invalid timestamp configuration.")]
     InvalidTimestamps, // 6003
-    #[msg("Invalid amount: Total amount must be greater than zero.")]
+
+    #[msg("Invalid amount specified.")]
     InvalidAmount, // 6004
-    #[msg("Schedule is already fully processed and all tokens transferred.")]
+
+    #[msg("Vesting schedule is already fully processed.")]
     ScheduleFullyProcessed, // 6005
-    #[msg("No transferable amount at current time for this schedule.")]
+
+    #[msg("No transferable amount available.")]
     NoTransferableAmount, // 6006
-    #[msg("Distribution hub address is not set.")]
+
+    #[msg("Distribution hub is not set.")]
     DistributionHubNotSet, // 6007
-    #[msg("Vesting schedule data is invalid or not initialized.")]
+
+    #[msg("Invalid vesting schedule data.")]
     InvalidVestingScheduleData, // 6008
-    // #[msg("It's too early to apply the pending hub update.")] // Covered by TimelockNotExpired
-    // TooEarlyForHubUpdate,
-    #[msg("The number of accounts to process exceeds the maximum allowed or remaining_accounts mismatch.")]
+
+    #[msg("Too many accounts to process in a single transaction.")]
     TooManyAccountsToProcess, // 6009
-    #[msg("Invalid account passed for vesting schedule processing.")]
+
+    #[msg("Invalid remaining account provided.")]
     InvalidRemainingAccount, // 6010
-    #[msg("The provided mint does not match the schedule's mint or hub's mint.")]
+
+    #[msg("Token mint mismatch.")]
     MintMismatch, // 6011
-    #[msg("The provided vault does not match the schedule's vault field.")]
+
+    #[msg("Vault account mismatch.")]
     VaultMismatch, // 6012
-    #[msg("The distribution hub token account is not for the correct mint.")]
+
+    #[msg("Hub account mint mismatch.")]
     HubAccountMintMismatch, // 6013
-    #[msg("The distribution hub token account is not owned by the distribution hub address.")]
+
+    #[msg("Hub account owner mismatch.")]
     HubAccountOwnerMismatch, // 6014
-    #[msg("Cannot propose the same hub address that is already active or pending.")]
+
+    #[msg("Hub address has not changed.")]
     HubAddressNotChanged, // 6015
-    #[msg("Vault authority does not match vesting schedule PDA.")]
+
+    #[msg("Vault authority mismatch.")]
     VaultAuthorityMismatch, // 6016
-    #[msg("Schedule ID already exists or total_schedules counter issue.")]
+
+    #[msg("Schedule ID conflict.")]
     ScheduleIdConflict, // 6017
+
+    #[msg("Concurrent modification detected.")]
+    ConcurrentModification, // 6018
+
+    #[msg("Invalid vault state.")]
+    InvalidVaultState, // 6019
 }

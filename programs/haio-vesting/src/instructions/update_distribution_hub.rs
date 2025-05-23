@@ -1,9 +1,11 @@
 // programs/haio-vesting/src/instructions/update_distribution_hub.rs
 
 use anchor_lang::prelude::*;
+
+use crate::constants::{PROGRAM_CONFIG_SEED, HUB_UPDATE_TIMELOCK};
 use crate::state::ProgramConfig;
 use crate::errors::VestingError;
-use crate::constants::{PROGRAM_CONFIG_SEED, HUB_UPDATE_TIMELOCK};
+
 use crate::{DistributionHubUpdateProposed, DistributionHubUpdated}; // Events
 
 #[derive(Accounts)]
@@ -22,22 +24,22 @@ pub struct UpdateDistributionHub<'info> {
 
 pub fn handler(ctx: Context<UpdateDistributionHub>, new_hub_address: Pubkey) -> Result<()> {
     let config = &mut ctx.accounts.program_config;
-    let current_timestamp = Clock::get()?.unix_timestamp;
+    let clock = Clock::get()?;
+    let current_timestamp = clock.unix_timestamp;
 
     // Case 1: Initial setup (current hub is Pubkey::default())
     if config.distribution_hub == Pubkey::default() {
         require!(new_hub_address != Pubkey::default(), VestingError::InvalidAmount); // Cannot set to default again
-        let old_hub = config.distribution_hub;
+
         config.distribution_hub = new_hub_address;
-        config.pending_hub = None;
-        config.hub_update_timelock = None;
 
         emit!(DistributionHubUpdated {
-            updated_by: ctx.accounts.admin.key(),
-            old_hub,
+            admin: ctx.accounts.admin.key(),
+            old_hub: Pubkey::default(),
             new_hub: new_hub_address,
             timestamp: current_timestamp,
         });
+
         msg!("Distribution hub initialized to: {}", new_hub_address);
         return Ok(());
     }
@@ -45,21 +47,22 @@ pub fn handler(ctx: Context<UpdateDistributionHub>, new_hub_address: Pubkey) -> 
     // Case 2: Confirming a pending update
     // Admin calls this instruction again with the same `new_hub_address` that is currently in `pending_hub`.
     if let Some(pending_hub_val) = config.pending_hub {
-        if pending_hub_val == new_hub_address {
+        if new_hub_address == pending_hub_val {
             let timelock_expiry = config.hub_update_timelock.ok_or(VestingError::TimelockNotExpired)?; // Should exist
             require!(current_timestamp >= timelock_expiry, VestingError::TimelockNotExpired);
-            
+
             let old_hub = config.distribution_hub;
-            config.distribution_hub = pending_hub_val;
+            config.distribution_hub = new_hub_address;
             config.pending_hub = None;
             config.hub_update_timelock = None;
 
             emit!(DistributionHubUpdated {
-                updated_by: ctx.accounts.admin.key(),
-                old_hub,
-                new_hub: pending_hub_val,
+                admin: ctx.accounts.admin.key(),
+                old_hub: old_hub,
+                new_hub: config.distribution_hub,
                 timestamp: current_timestamp,
             });
+
             msg!("Distribution hub updated from {} to: {}", old_hub, config.distribution_hub);
             return Ok(());
         }
@@ -70,21 +73,24 @@ pub fn handler(ctx: Context<UpdateDistributionHub>, new_hub_address: Pubkey) -> 
     if let Some(pending_hub_val) = config.pending_hub { // If there's an existing pending hub
         require!(new_hub_address != pending_hub_val, VestingError::HubAddressNotChanged); // And it's different from the new proposal
     }
-    
+
     config.pending_hub = Some(new_hub_address);
     let new_timelock_expiry = current_timestamp.checked_add(HUB_UPDATE_TIMELOCK).ok_or(VestingError::MathOverflow)?;
     config.hub_update_timelock = Some(new_timelock_expiry);
 
     emit!(DistributionHubUpdateProposed {
-        proposed_by: ctx.accounts.admin.key(),
-        new_pending_hub: new_hub_address,
+        admin: ctx.accounts.admin.key(),
+        current_hub: config.distribution_hub,
+        proposed_hub: new_hub_address,
         timelock_expiry: new_timelock_expiry,
-        timestamp: current_timestamp,
     });
+
     msg!(
-        "Distribution hub update proposed to: {}. Timelock active until approx timestamp: {}",
-        new_hub_address, new_timelock_expiry
+        "Distribution hub update proposed from {} to {}. Timelock expires at: {}",
+        config.distribution_hub,
+        new_hub_address,
+        new_timelock_expiry
     );
-    
+
     Ok(())
 }
