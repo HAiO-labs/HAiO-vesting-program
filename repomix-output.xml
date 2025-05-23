@@ -1,0 +1,1186 @@
+This file is a merged representation of a subset of the codebase, containing files not matching ignore patterns, combined into a single document by Repomix.
+The content has been processed where content has been compressed (code blocks are separated by ⋮---- delimiter).
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+4. Repository files, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching these patterns are excluded: apps/scheduler, Jenkinsfile, package*, Docker*, apps/haio-api/src/modules/music/playlist/playlist-admin.service.ts, apps/haio-api/src/modules/music/song/song-admin.service.ts, apps/haio-api/src/modules/reward/*, apps/haio-api/src/modules/web3/nft/*
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Content has been compressed - code blocks are separated by ⋮---- delimiter
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+<additional_info>
+
+</additional_info>
+
+</file_summary>
+
+<directory_structure>
+migrations/
+  deploy.ts
+programs/
+  haio-vesting/
+    src/
+      instructions/
+        crank_vesting_schedules.rs
+        create_vesting_schedule.rs
+        initialize.rs
+        mod.rs
+        update_distribution_hub.rs
+      state/
+        mod.rs
+        program_config.rs
+        vesting_schedule.rs
+      constants.rs
+      errors.rs
+      lib.rs
+    Cargo.toml
+    Xargo.toml
+scripts/
+  01_create_token.ts
+  02_create_vesting_schedules.ts
+  03_run_crank.ts
+tests/
+  haio-vesting.ts
+.editorconfig
+.gitignore
+.prettierignore
+.prettierrc
+Anchor.toml
+Cargo.toml
+README.md
+rustfmt.toml
+tsconfig.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="migrations/deploy.ts">
+// Migrations are an early feature. Currently, they're nothing more than this
+// single deploy script that's invoked from the CLI, injecting a provider
+// configured from the workspace's Anchor.toml.
+⋮----
+import { Program, PublicKey, SystemProgram } from '@coral-xyz/anchor';
+import { HaioVesting } from '../target/types/haio_vesting'; // Adjust path as needed
+// import { BpfLoaderUpgradeable, Transaction, sendAndConfirmTransaction, Keypair } from '@solana/web3.js'; // For upgrade authority
+⋮----
+// Configure client to use the provider.
+⋮----
+// --- 1. Initialize ProgramConfig if not already done ---
+⋮----
+// Assuming error means account not found, so initialize.
+⋮----
+.signers([adminWallet.payer]) // provider.wallet is the payer by default if signers not specified for admin
+⋮----
+// If it's a different error, rethrow or handle appropriately
+// For example, if it's a deserialization error, the account might exist but be malformed.
+⋮----
+// --- 2. (Optional) Set initial Distribution Hub if needed ---
+// This should typically be done as a separate operational step after deployment and initialization.
+// const initialHubAddress = new PublicKey("YOUR_INITIAL_DISTRIBUTION_HUB_PUBKEY");
+// const currentConfig = await program.account.programConfig.fetch(programConfigPDA);
+// if (currentConfig.distributionHub.equals(new PublicKey(Buffer.alloc(32)))) { // Check if unset (all zeros)
+//   console.log(`Setting initial distribution hub to: ${initialHubAddress.toBase58()}`);
+//   await program.methods
+//     .updateDistributionHub(initialHubAddress)
+//     .accounts({
+//       admin: adminWallet.publicKey,
+//       programConfig: programConfigPDA,
+//     })
+//     .rpc();
+//   console.log("Initial distribution hub set.");
+// }
+⋮----
+// --- 3. TODO: Program Upgrade Authority Management ---
+// After deployment and thorough testing, the upgrade authority should be managed.
+// This usually means revoking it (setting to 'None') or transferring to a secure multi-sig.
+// This step is CRITICAL for production deployments.
+⋮----
+// Example using web3.js (conceptual - requires BpfLoaderUpgradeable program interaction)
+// This is a complex operation and should be handled with extreme care.
+/*
+  async function revokeUpgradeAuthority(
+    connection: anchor.web3.Connection,
+    programId: PublicKey,
+    currentUpgradeAuthorityKeypair: anchor.web3.Keypair // The keypair that currently holds upgrade authority
+  ) {
+    const tx = new Transaction().add(
+      BpfLoaderUpgradeable.setAuthority({
+        programAddress: programId, // Address of the program to change authority for
+        currentAuthority: currentUpgradeAuthorityKeypair.publicKey,
+        newAuthority: null, // Set to null to make it immutable (no more upgrades)
+      })
+    );
+    try {
+      const signature = await sendAndConfirmTransaction(
+        connection,
+        tx,
+        [currentUpgradeAuthorityKeypair] // Sign with the current authority
+      );
+      console.log(`Program upgrade authority revoked. Transaction: ${signature}`);
+    } catch (err) {
+      console.error("Failed to revoke program upgrade authority:", err);
+      console.error("This is a critical step. Ensure it's completed if intended.");
+    }
+  }
+  // To call this, you would need the programId and the keypair for the current upgrade authority.
+  // By default, after `anchor deploy`, the upgrade authority is often the wallet used for deployment.
+  // await revokeUpgradeAuthority(program.provider.connection, program.programId, adminWallet.payer);
+  */
+</file>
+
+<file path="programs/haio-vesting/src/instructions/crank_vesting_schedules.rs">
+// programs/haio-vesting/src/instructions/crank_vesting_schedules.rs
+⋮----
+use crate::errors::VestingError;
+⋮----
+use crate::TokensReleased;
+⋮----
+pub struct CrankVestingSchedules<'info> {
+⋮----
+pub fn handler<'info>(
+⋮----
+let distribution_hub_token_account_info = ctx.accounts.distribution_hub_token_account.to_account_info();
+let token_program_info = ctx.accounts.token_program.to_account_info();
+⋮----
+require!(program_config.distribution_hub != Pubkey::default(), VestingError::DistributionHubNotSet);
+⋮----
+let max_possible_from_remaining = remaining_accounts_slice.len() / 2;
+⋮----
+.min(MAX_SCHEDULES_PER_CRANK)
+.min(max_possible_from_remaining as u8);
+⋮----
+require!(
+⋮----
+// --- Read VestingSchedule data (short borrow) ---
+⋮----
+let data = vesting_schedule_info_ref.try_borrow_data()?;
+⋮----
+require!(vesting_schedule_account.is_initialized, VestingError::InvalidVestingScheduleData);
+⋮----
+// --- Read TokenAccount for vesting_vault_info (short borrow) ---
+⋮----
+let data = vesting_vault_info_ref.try_borrow_data()?;
+⋮----
+// --- Security and Consistency Checks ---
+require_keys_eq!(vesting_vault_data.owner, vesting_schedule_info_ref.key(), VestingError::VaultAuthorityMismatch);
+require_keys_eq!(vesting_schedule_account.token_vault, vesting_vault_info_ref.key(), VestingError::VaultMismatch);
+require_keys_eq!(vesting_vault_data.mint, vesting_schedule_account.mint, VestingError::MintMismatch);
+require_keys_eq!(vesting_schedule_account.mint, ctx.accounts.distribution_hub_token_account.mint, VestingError::HubAccountMintMismatch);
+⋮----
+msg!("Schedule {} (ID: {}) already fully processed. Skipping.", vesting_schedule_info_ref.key(), vesting_schedule_account.schedule_id);
+⋮----
+let transferable_amount = vesting_schedule_account.get_transferable_amount(current_timestamp)?;
+⋮----
+msg!("No transferable amount for schedule {} (ID: {}) at timestamp {}. Skipping.", vesting_schedule_info_ref.key(), vesting_schedule_account.schedule_id, current_timestamp);
+⋮----
+let actual_transfer_amount = transferable_amount.min(vesting_vault_data.amount);
+⋮----
+msg!("Vault for schedule {} (ID: {}) is empty or calculated transferable amount is zero after min(). Skipping.", vesting_schedule_info_ref.key(), vesting_schedule_account.schedule_id);
+⋮----
+let schedule_id_bytes = vesting_schedule_account.schedule_id.to_le_bytes();
+⋮----
+from: vesting_vault_info_ref.clone(),
+to: distribution_hub_token_account_info.clone(),
+authority: vesting_schedule_info_ref.clone(),
+⋮----
+token_program_info.clone(),
+⋮----
+// Update schedule amount_transferred
+⋮----
+.checked_add(actual_transfer_amount)
+.ok_or(VestingError::MathOverflow)?;
+⋮----
+// --- Write back updated schedule data (short borrow) ---
+⋮----
+let mut data = vesting_schedule_info_ref.try_borrow_mut_data()?;
+vesting_schedule_account.try_serialize(&mut &mut data[..])?;
+⋮----
+emit!(TokensReleased {
+⋮----
+msg!(
+⋮----
+schedules_successfully_processed_count = schedules_successfully_processed_count.checked_add(1).ok_or(VestingError::MathOverflow)?;
+⋮----
+msg!("Successfully processed {} out of {} attempted vesting schedules in this crank.", schedules_successfully_processed_count, num_schedules_to_process_actual);
+Ok(())
+</file>
+
+<file path="programs/haio-vesting/src/instructions/create_vesting_schedule.rs">
+// programs/haio-vesting/src/instructions/create_vesting_schedule.rs
+⋮----
+use crate::state::ProgramConfig;
+use crate::state::VestingSchedule;
+use crate::state::SourceCategory;
+use crate::errors::VestingError;
+⋮----
+use crate::VestingScheduleCreated; // Event
+⋮----
+pub struct CreateVestingScheduleParams {
+⋮----
+pub struct CreateVestingSchedule<'info> {
+⋮----
+constraint = depositor_token_account.owner == admin.key() @ VestingError::Unauthorized, // Admin must own the source tokens
+⋮----
+token::authority = vesting_schedule, // VestingSchedule PDA is the authority of its vault
+⋮----
+pub fn handler(ctx: Context<CreateVestingSchedule>, schedule_id: u64, params: CreateVestingScheduleParams) -> Result<()> {
+// Validate parameters
+require!(params.total_amount > 0, VestingError::InvalidAmount);
+require!(
+⋮----
+params.vesting_start_timestamp < params.vesting_end_timestamp, // Vesting start must be strictly before end
+⋮----
+// Verify that the provided schedule_id matches the expected next ID
+require!(schedule_id == program_config.total_schedules, VestingError::ScheduleIdConflict);
+⋮----
+// Initialize vesting schedule state
+vesting_schedule_account.init(
+⋮----
+ctx.accounts.mint.key(),
+ctx.accounts.vesting_vault.key(),
+ctx.accounts.admin.key(), // Depositor is the admin creating the schedule
+⋮----
+params.source_category.clone(),
+⋮----
+// Transfer tokens from depositor's account to the vesting vault
+⋮----
+from: ctx.accounts.depositor_token_account.to_account_info(),
+to: ctx.accounts.vesting_vault.to_account_info(),
+authority: ctx.accounts.admin.to_account_info(), // Admin authorizes transfer from their account
+⋮----
+let cpi_program = ctx.accounts.token_program.to_account_info();
+⋮----
+// Increment total schedules count in program_config
+program_config.total_schedules = program_config.total_schedules.checked_add(1).ok_or(VestingError::MathOverflow)?;
+⋮----
+emit!(VestingScheduleCreated {
+⋮----
+msg!(
+⋮----
+Ok(())
+</file>
+
+<file path="programs/haio-vesting/src/instructions/initialize.rs">
+// programs/haio-vesting/src/instructions/initialize.rs
+⋮----
+use crate::state::ProgramConfig;
+use crate::constants::PROGRAM_CONFIG_SEED;
+use crate::ProgramInitialized;
+⋮----
+pub struct Initialize<'info> {
+⋮----
+// The handler:
+pub fn handler(ctx: Context<Initialize>) -> Result<()> {
+⋮----
+config.admin = ctx.accounts.admin.key();
+⋮----
+emit!(ProgramInitialized {
+⋮----
+msg!("Vesting program initialized with admin: {}", config.admin);
+msg!("Program config PDA: {}", config.key());
+Ok(())
+</file>
+
+<file path="programs/haio-vesting/src/instructions/mod.rs">
+// programs/haio-vesting/src/instructions/mod.rs
+⋮----
+pub mod initialize;
+pub mod create_vesting_schedule;
+pub mod crank_vesting_schedules;
+pub mod update_distribution_hub;
+</file>
+
+<file path="programs/haio-vesting/src/instructions/update_distribution_hub.rs">
+// programs/haio-vesting/src/instructions/update_distribution_hub.rs
+⋮----
+use crate::state::ProgramConfig;
+use crate::errors::VestingError;
+⋮----
+use crate::{DistributionHubUpdateProposed, DistributionHubUpdated}; // Events
+⋮----
+pub struct UpdateDistributionHub<'info> {
+⋮----
+pub fn handler(ctx: Context<UpdateDistributionHub>, new_hub_address: Pubkey) -> Result<()> {
+⋮----
+// Case 1: Initial setup (current hub is Pubkey::default())
+⋮----
+require!(new_hub_address != Pubkey::default(), VestingError::InvalidAmount); // Cannot set to default again
+⋮----
+emit!(DistributionHubUpdated {
+⋮----
+msg!("Distribution hub initialized to: {}", new_hub_address);
+return Ok(());
+⋮----
+// Case 2: Confirming a pending update
+// Admin calls this instruction again with the same `new_hub_address` that is currently in `pending_hub`.
+⋮----
+let timelock_expiry = config.hub_update_timelock.ok_or(VestingError::TimelockNotExpired)?; // Should exist
+require!(current_timestamp >= timelock_expiry, VestingError::TimelockNotExpired);
+⋮----
+msg!("Distribution hub updated from {} to: {}", old_hub, config.distribution_hub);
+⋮----
+// Case 3: Proposing a new update (or overwriting an existing unconfirmed pending one)
+require!(new_hub_address != config.distribution_hub, VestingError::HubAddressNotChanged); // Cannot propose the current active hub
+if let Some(pending_hub_val) = config.pending_hub { // If there's an existing pending hub
+require!(new_hub_address != pending_hub_val, VestingError::HubAddressNotChanged); // And it's different from the new proposal
+⋮----
+config.pending_hub = Some(new_hub_address);
+let new_timelock_expiry = current_timestamp.checked_add(HUB_UPDATE_TIMELOCK).ok_or(VestingError::MathOverflow)?;
+config.hub_update_timelock = Some(new_timelock_expiry);
+⋮----
+emit!(DistributionHubUpdateProposed {
+⋮----
+msg!(
+⋮----
+Ok(())
+</file>
+
+<file path="programs/haio-vesting/src/state/mod.rs">
+// programs/haio-vesting/src/state/mod.rs
+⋮----
+pub mod program_config;
+pub mod vesting_schedule;
+⋮----
+// These lines were incorrect here and caused many errors.
+// They belong in `instructions/mod.rs` or are implicitly handled by `lib.rs`.
+// pub mod initialize;
+// pub mod create_vesting_schedule;
+// pub mod crank_vesting_schedules;
+// pub mod update_distribution_hub;
+⋮----
+// These use statements were also incorrect here.
+// pub use initialize::*;
+// pub use create_vesting_schedule::*;
+// pub use crank_vesting_schedules::*;
+// pub use update_distribution_hub::*;
+⋮----
+// Correctly re-export items from the state modules if needed elsewhere directly via `state::`
+pub use program_config::ProgramConfig;
+</file>
+
+<file path="programs/haio-vesting/src/state/program_config.rs">
+// programs/haio-vesting/src/state/program_config.rs
+⋮----
+use crate::constants::DISCRIMINATOR_SIZE;
+⋮----
+pub struct ProgramConfig {
+/// Admin authority for the program
+⋮----
+/// Distribution hub program address (or wallet address) where tokens are sent
+⋮----
+/// Pending distribution hub address (for timelock mechanism)
+⋮----
+/// Timelock expiry timestamp for the pending hub update
+⋮----
+/// Total number of vesting schedules created. Also used as the next schedule_id.
+⋮----
+/// Bump seed for this PDA
+⋮----
+impl ProgramConfig {
+// Option<Pubkey> is 1 (for Some/None) + 32 (for Pubkey if Some) = 33 bytes
+// Option<i64> is 1 (for Some/None) + 8 (for i64 if Some) = 9 bytes
+⋮----
++ 32 // admin
++ 32 // distribution_hub
++ (1 + 32) // pending_hub (Option<Pubkey>)
++ (1 + 8)  // hub_update_timelock (Option<i64>)
++ 8  // total_schedules (u64)
++ 1; // bump (u8)
+</file>
+
+<file path="programs/haio-vesting/src/state/vesting_schedule.rs">
+// programs/haio-vesting/src/state/vesting_schedule.rs
+⋮----
+use crate::errors::VestingError;
+use crate::constants::DISCRIMINATOR_SIZE;
+⋮----
+pub enum SourceCategory {
+⋮----
+pub struct VestingSchedule {
+/// Schedule ID, typically an incrementing number from program_config.total_schedules
+⋮----
+/// Token mint for this schedule
+⋮----
+/// Token vault PDA holding tokens for this schedule
+⋮----
+/// The authority that deposited the tokens (usually the admin)
+pub depositor: Pubkey, // Should be the admin who creates the schedule
+/// Total allocation amount for this schedule
+⋮----
+/// Cliff end timestamp (Unix timestamp)
+⋮----
+/// Vesting start timestamp (Unix timestamp, usually same as cliff end or later)
+⋮----
+/// Vesting end timestamp (Unix timestamp)
+⋮----
+/// Amount already transferred to the distribution hub
+⋮----
+/// Source category for fund tracking
+⋮----
+/// Flag to indicate if the schedule account is properly initialized
+⋮----
+/// Bump seed for this PDA
+⋮----
+impl VestingSchedule {
+⋮----
++ 8 // schedule_id (u64)
++ 32 // mint (Pubkey)
++ 32 // token_vault (Pubkey)
++ 32 // depositor (Pubkey)
++ 8 // total_amount (u64)
++ 8 // cliff_timestamp (i64)
++ 8 // vesting_start_timestamp (i64)
++ 8 // vesting_end_timestamp (i64)
++ 8 // amount_transferred (u64)
++ 1 // source_category (enum variant index only for simple enum)
++ 1 // is_initialized (bool)
++ 1; // bump (u8)
+⋮----
+pub fn init(
+⋮----
+/// Calculate unlocked amount at given timestamp
+pub fn calculate_unlocked_amount(&self, current_timestamp: i64) -> Result<u64> {
+⋮----
+return Err(VestingError::InvalidVestingScheduleData.into());
+⋮----
+// Before cliff, nothing is unlocked
+⋮----
+return Ok(0);
+⋮----
+// After vesting end, everything is unlocked
+⋮----
+return Ok(self.total_amount);
+⋮----
+// If vesting_start_timestamp is at or after vesting_end_timestamp (invalid state, should be caught at creation)
+// or if current_timestamp is before vesting_start_timestamp (but after cliff)
+// In these cases, if past cliff, only cliff amount might be considered (if cliff release is a feature).
+// Current model: linear vesting begins at `vesting_start_timestamp`. No separate cliff release.
+⋮----
+// If past cliff, and (start >= end OR current < start), means 0 from linear vesting.
+⋮----
+// Linear vesting calculation
+⋮----
+.checked_sub(self.vesting_start_timestamp)
+.ok_or(VestingError::MathOverflow)?; // Should be non-negative due to check above
+⋮----
+.ok_or(VestingError::MathOverflow)?; // Should be positive due to creation validation
+⋮----
+if vesting_duration == 0 { // Should not happen if validated at creation (start < end)
+return Ok(self.total_amount); // All vested if duration is zero and past start
+⋮----
+// Use u128 for intermediate multiplication to prevent overflow
+⋮----
+.checked_mul(elapsed_since_vesting_start as u128)
+.ok_or(VestingError::MathOverflow)?;
+⋮----
+.checked_div(vesting_duration as u128)
+.ok_or(VestingError::MathOverflow)?; // Division by zero caught by vesting_duration == 0 check
+⋮----
+// Safely convert back to u64
+⋮----
+.map_err(|_| VestingError::MathOverflow)?;
+⋮----
+Ok(unlocked_amount_u64.min(self.total_amount)) // Cap at total_amount
+⋮----
+/// Get amount available to transfer
+pub fn get_transferable_amount(&self, current_timestamp: i64) -> Result<u64> {
+⋮----
+let unlocked_amount = self.calculate_unlocked_amount(current_timestamp)?;
+Ok(unlocked_amount.saturating_sub(self.amount_transferred))
+</file>
+
+<file path="programs/haio-vesting/src/constants.rs">
+// programs/haio-vesting/src/constants.rs
+⋮----
+// Maximum number of vesting schedules to process in one crank instruction
+pub const MAX_SCHEDULES_PER_CRANK: u8 = 10; // Example value, can be adjusted
+⋮----
+// Minimum time lock for distribution hub updates
+⋮----
+pub const HUB_UPDATE_TIMELOCK: i64 = 2 * 24 * 60 * 60; // 48 hours in seconds for production
+⋮----
+pub const HUB_UPDATE_TIMELOCK: i64 = 5; // 5 seconds for testing when test-utils feature is enabled
+</file>
+
+<file path="programs/haio-vesting/src/errors.rs">
+// programs/haio-vesting/src/errors.rs
+⋮----
+pub enum VestingError {
+⋮----
+Unauthorized, // 6000
+⋮----
+MathOverflow, // 6001
+⋮----
+TimelockNotExpired, // 6002
+⋮----
+InvalidTimestamps, // 6003
+⋮----
+InvalidAmount, // 6004
+⋮----
+ScheduleFullyProcessed, // 6005
+⋮----
+NoTransferableAmount, // 6006
+⋮----
+DistributionHubNotSet, // 6007
+⋮----
+InvalidVestingScheduleData, // 6008
+// #[msg("It's too early to apply the pending hub update.")] // Covered by TimelockNotExpired
+// TooEarlyForHubUpdate,
+⋮----
+TooManyAccountsToProcess, // 6009
+⋮----
+InvalidRemainingAccount, // 6010
+⋮----
+MintMismatch, // 6011
+⋮----
+VaultMismatch, // 6012
+⋮----
+HubAccountMintMismatch, // 6013
+⋮----
+HubAccountOwnerMismatch, // 6014
+⋮----
+HubAddressNotChanged, // 6015
+⋮----
+VaultAuthorityMismatch, // 6016
+⋮----
+ScheduleIdConflict, // 6017
+</file>
+
+<file path="programs/haio-vesting/src/lib.rs">
+// programs/haio-vesting/src/lib.rs
+⋮----
+pub mod constants;
+pub mod errors;
+pub mod instructions;
+pub mod state;
+⋮----
+declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+⋮----
+pub mod haio_vesting {
+⋮----
+pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+⋮----
+pub fn create_vesting_schedule(
+⋮----
+pub fn crank_vesting_schedules<'info>(
+⋮----
+pub fn update_distribution_hub(
+⋮----
+// --- Events ---
+⋮----
+pub struct ProgramInitialized {
+⋮----
+pub struct VestingScheduleCreated {
+⋮----
+pub struct TokensReleased {
+⋮----
+pub struct DistributionHubUpdateProposed {
+⋮----
+pub struct DistributionHubUpdated {
+</file>
+
+<file path="programs/haio-vesting/Cargo.toml">
+[package]
+name = "haio-vesting"
+version = "0.1.0"
+description = "Created with Anchor"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "haio_vesting"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+test-utils = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
+anchor-spl = { version = "0.31.1", features = ["token"] }
+</file>
+
+<file path="programs/haio-vesting/Xargo.toml">
+[target.bpfel-unknown-unknown.dependencies.std]
+features = []
+</file>
+
+<file path="scripts/01_create_token.ts">
+import {
+  createMint,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+  setAuthority,
+  AuthorityType,
+} from '@solana/spl-token';
+import { Connection, Keypair, PublicKey, clusterApiUrl } from '@solana/web3.js';
+⋮----
+// Configuration
+⋮----
+const TOTAL_SUPPLY = 1_000_000_000; // 1 billion tokens
+⋮----
+async function main()
+⋮----
+// Load wallet
+⋮----
+// Connect to cluster
+⋮----
+// Create mint
+⋮----
+walletKeypair.publicKey, // Mint authority
+null, // No freeze authority
+⋮----
+// Create treasury token account
+⋮----
+// Mint total supply
+⋮----
+// Disable mint authority
+⋮----
+// Save configuration
+</file>
+
+<file path="scripts/02_create_vesting_schedules.ts">
+import { Program } from '@coral-xyz/anchor';
+import { HaioVesting } from '../target/types/haio_vesting';
+import { getOrCreateAssociatedTokenAccount } from '@solana/spl-token';
+⋮----
+// Vesting schedule configurations
+⋮----
+totalAmount: 30_000_000, // 30M tokens
+⋮----
+totalAmount: 40_000_000, // 40M tokens
+⋮----
+totalAmount: 150_000_000, // 150M tokens
+⋮----
+// Add more team members...
+⋮----
+// Add more categories...
+⋮----
+async function main()
+⋮----
+// Load configuration
+⋮----
+// Setup provider
+⋮----
+// Check if payer exists
+⋮----
+// Get program config
+⋮----
+// Get current config to know the schedule count
+⋮----
+// Process each category
+⋮----
+// Process each recipient
+⋮----
+// Derive PDAs
+⋮----
+// Get depositor token account
+⋮----
+// Create sourceCategory enum value based on the category
+⋮----
+// case 'ecosystem':
+//   sourceCategory = { ecosystem: {} };
+//   break;
+// case 'marketing':
+//   sourceCategory = { marketing: {} };
+//   break;
+⋮----
+// Create the params object
+⋮----
+// Add delay to avoid rate limiting
+</file>
+
+<file path="scripts/03_run_crank.ts">
+import { Program } from '@coral-xyz/anchor';
+import { HaioVesting } from '../target/types/haio_vesting';
+import { getOrCreateAssociatedTokenAccount, getAccount } from '@solana/spl-token';
+import { ComputeBudgetProgram, Transaction } from '@solana/web3.js';
+⋮----
+const BATCH_SIZE = 5; // Process 5 schedules at a time
+⋮----
+async function main()
+⋮----
+// Load configuration
+⋮----
+// Setup provider
+⋮----
+// Check if payer exists
+⋮----
+// Get program config
+⋮----
+// Get hub token account
+⋮----
+// Process schedules in batches
+⋮----
+// Collect schedules and vaults for this batch
+⋮----
+// Fetch schedule to check if it needs processing
+⋮----
+// Simple check - in real implementation, use the contract's calculation
+⋮----
+// Prepare instructions for compute budget
+const setComputeUnitLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }); // Request 600k CUs
+const addPriorityFeeIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1000 }); // Optional: Add priority fee (e.g., 1000 microLamports)
+⋮----
+.preInstructions([setComputeUnitLimitIx, addPriorityFeeIx]) // Add preInstructions here
+.rpc({ skipPreflight: false }); // skipPreflight can be true for faster local tests if
+⋮----
+// Wait for confirmation
+⋮----
+// Check hub token account balance
+⋮----
+// Add delay between batches
+⋮----
+// Run crank periodically
+async function runPeriodically()
+⋮----
+const interval = Number(process.env.CRANK_INTERVAL || 3600000); // Default: 1 hour
+⋮----
+// Check if running in periodic mode
+</file>
+
+<file path="tests/haio-vesting.ts">
+// tests/haio-vesting.ts
+⋮----
+import { Program, BN } from '@coral-xyz/anchor';
+import { HaioVesting } from '../target/types/haio_vesting'; // Adjust path if needed
+import {
+  TOKEN_PROGRAM_ID,
+  createMint,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+  getAccount,
+  Account as SplAccount,
+} from '@solana/spl-token';
+import {
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  ComputeBudgetProgram,
+  LAMPORTS_PER_SOL,
+  sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import { expect } from 'chai';
+⋮----
+function findErrorCodeInLogs(
+  logs: string[] | undefined,
+  defaultCode: string = 'UnknownError'
+): string
+⋮----
+// VestingError enum from errors.rs (0-indexed in Rust, add 6000 for program error)
+// Unauthorized = 6000 (0x1770)
+// MathOverflow = 6001 (0x1771)
+// TimelockNotExpired = 6002 (0x1772)
+// InvalidTimestamps = 6003 (0x1773)
+// InvalidAmount = 6004 (0x1774)
+// ... and so on
+if (rawErrorCode === 0x1772) return 'TimelockNotExpired'; // 6002
+if (rawErrorCode === 0x1773) return 'InvalidTimestamps'; // 6003
+// Add other specific mappings if needed for other tests
+⋮----
+// Fallback message matching
+⋮----
+if (log.includes('Account `admin` not provided')) return 'AccountNotProvided_admin'; // Example for specific message
+⋮----
+// `admin` is the wallet associated with the provider.
+// For signing transactions where `admin` is a signer, Anchor handles it automatically
+// if `admin.publicKey` is passed in `accounts` and no explicit `signers` array is given,
+// or if `admin.payer` (if `admin` is a `NodeWallet`) or `admin` itself (if `admin` is `Keypair`) is in `signers`.
+// Here, `provider.wallet` is an object that can sign, so Anchor uses it if `admin.publicKey` is the signer.
+const adminWallet = provider.wallet as anchor.Wallet; // Explicitly using adminWallet for clarity
+⋮----
+adminWallet.payer, // Payer for mint creation
+adminWallet.publicKey, // Mint authority
+⋮----
+adminWallet.publicKey, // Mint authority
+⋮----
+function sleep(ms: number)
+⋮----
+// Helper to get PDAs for a schedule
+async function getSchedulePDAs(scheduleIdInput: number | BN)
+⋮----
+// Helper to create a dummy schedule for testing
+async function createDummySchedule(
+    currentScheduleId: number | BN,
+    amount: number | BN,
+    cliffOffsetSeconds: number = 0,
+    startOffsetSeconds: number = 0,
+    vestingDurationSeconds: number = 1
+)
+⋮----
+// --- Fixed function call with schedule_id parameter ---
+⋮----
+scheduleIdBN, // Add the schedule_id parameter
+⋮----
+admin: adminWallet.publicKey, // Pass the public key of the admin
+⋮----
+.rpc(); // Anchor uses provider.wallet to sign if admin.publicKey matches
+⋮----
+// Log the actual error for debugging if it's not "already in use"
+⋮----
+// For this test to be truly "initial set", the hub should be UNSET_PUBKEY
+// If a previous test run set it, this test might behave as an update proposal.
+// A robust setup might involve deploying a fresh ProgramConfig for this specific test block.
+⋮----
+// To ensure it's an initial set for testing, you might need to reset state or use a new programConfigPDA
+// For now, we proceed. If it's already set to distributionHubSigner.publicKey, it should be a no-op or specific error.
+⋮----
+// Ensure current hub is distributionHubSigner.publicKey before proposing a new one
+⋮----
+// If not, set it first (assuming it's an initial set or can be directly updated)
+⋮----
+currentConfig = await program.account.programConfig.fetch(programConfigPDA); // refresh
+⋮----
+// if it was proposed
+⋮----
+expect(fetchedProgramConfig.hubUpdateTimelock.toNumber()).to.be.closeTo(expectedTimelock, 5); // Increased delta for CI timing
+⋮----
+// This sequence attempts to set or confirm the hub.
+// It assumes that if a pending hub exists, it's the one we want or we can overwrite.
+// This might need more robust handling if tests are run in arbitrary order or state persists unexpectedly.
+⋮----
+/* ignore if it fails, e.g. trying to set same active hub */
+⋮----
+// If after all attempts, it's still not set, then fail the setup.
+⋮----
+const nextScheduleId = fetchedProgramConfig.totalSchedules; // This is a BN
+⋮----
+nextScheduleId, // Add the schedule_id parameter
+⋮----
+vestingStartTimestamp: new BN(currentTime + 60), // Start before cliff
+⋮----
+const initialTotalSchedules = fetchedProgramConfig.totalSchedules; // This is a BN
+⋮----
+initialTotalSchedules, // Pass BN directly
+⋮----
+// fetchedProgramConfig is updated inside createDummySchedule
+⋮----
+// ... other assertions
+⋮----
+const scheduleIdToCrank = fetchedProgramConfig.totalSchedules; // BN
+⋮----
+1 // Vests very quickly
+⋮----
+// ... rest of the crank test ...
+⋮----
+const scheduleId = fetchedProgramConfig.totalSchedules; // BN
+⋮----
+otherUser.publicKey // ATA owned by someone else
+⋮----
+const scheduleId = fetchedProgramConfig.totalSchedules; // BN
+⋮----
+// First crank
+⋮----
+// Second crank
+</file>
+
+<file path=".editorconfig">
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{rs,toml}]
+indent_style = space
+indent_size = 4
+
+[*.{ts,js,json,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab
+</file>
+
+<file path=".gitignore">
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+*.lcov
+
+# Production
+build/
+dist/
+.anchor/
+
+# Misc
+.DS_Store
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDL
+target/idl/
+target/types/
+
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Keys
+**/keypair.json
+**/id.json
+!tests/fixtures/**/*.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test validator
+test-ledger/
+</file>
+
+<file path=".prettierignore">
+.anchor
+.DS_Store
+target
+node_modules
+dist
+build
+test-ledger
+</file>
+
+<file path=".prettierrc">
+{
+  "semi": true,
+  "trailingComma": "es5",
+  "singleQuote": true,
+  "printWidth": 100,
+  "tabWidth": 2,
+  "arrowParens": "always"
+}
+</file>
+
+<file path="Anchor.toml">
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+haio_vesting = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "Localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+
+[test]
+startup_wait = 5000
+shutdown_wait = 2000
+upgradeable = false
+
+# [[test.validator.clone]]
+# address = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+</file>
+
+<file path="Cargo.toml">
+[workspace]
+members = [
+    "programs/*"
+]
+resolver = "2"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1
+</file>
+
+<file path="README.md">
+# HAiO TGE Vesting Program
+
+Solana-based vesting program for HAiO token distribution.
+
+## Overview
+
+This program manages the vesting schedules for HAiO token, allowing time-based token releases according to predefined schedules. Released tokens are automatically transferred to a central distribution hub for final distribution to beneficiaries.
+
+## Features
+
+- Multiple vesting schedules with cliff and linear release periods
+- Source category tracking for transparent fund management
+- Permissionless crank mechanism for token releases
+- Integration with distribution hub program
+- Admin controls with timelock for critical operations
+
+## Development Setup
+
+### Prerequisites
+
+- Rust 1.87.0
+- Solana CLI 2.1.22
+- Anchor 0.31.1
+- Node.js 23
+
+### Installation
+
+```bash
+# Install dependencies
+yarn install
+
+# Build the program
+anchor build
+
+# Run tests
+anchor test
+Program Structure
+Copyprograms/haio-vesting/
+├── src/
+│   ├── lib.rs              # Program entry point
+│   ├── constants.rs        # Program constants
+│   ├── errors.rs           # Custom error definitions
+│   ├── state/              # Account structures
+│   │   ├── mod.rs
+│   │   ├── program_config.rs
+│   │   └── vesting_schedule.rs
+│   └── instructions/       # Program instructions
+│       ├── mod.rs
+│       ├── initialize.rs
+│       ├── create_vesting_schedule.rs
+│       ├── crank_vesting_schedules.rs
+│       └── update_distribution_hub.rs
+Key Accounts
+AccountDescriptionSeedsProgramConfigGlobal program configuration[b"program_config"]VestingScheduleIndividual vesting schedule[b"vesting_schedule", schedule_id.to_le_bytes()]VestingVaultToken vault for each schedule[b"vesting_vault", schedule_id.to_le_bytes()]
+Usage
+Initialize Program
+typescriptCopyawait program.methods
+  .initialize()
+  .accounts({
+    admin: adminKeypair.publicKey,
+    programConfig: programConfigPDA,
+    systemProgram: SystemProgram.programId,
+  })
+  .signers([adminKeypair])
+  .rpc();
+Create Vesting Schedule
+typescriptCopyawait program.methods
+  .createVestingSchedule({
+    totalAmount: new BN(1_000_000 * 10**9),
+    cliffTimestamp: new BN(cliffTime),
+    vestingStartTimestamp: new BN(vestingStart),
+    vestingEndTimestamp: new BN(vestingEnd),
+    sourceCategory: { seed: {} }, // or strategic, publicIDO, team, etc.
+  })
+  .accounts({
+    admin: adminKeypair.publicKey,
+    // ... other accounts
+  })
+  .signers([adminKeypair])
+  .rpc();
+Crank Vesting Schedules
+typescriptCopy// Anyone can call this
+await program.methods
+  .crankVestingSchedules(5) // Process up to 5 schedules
+  .accounts({
+    // ... required accounts
+  })
+  .rpc();
+Security Considerations
+
+Admin functions are restricted to program admin only
+Distribution hub updates have a 48-hour timelock
+All calculations use checked math to prevent overflows
+Vesting schedules are immutable once created
+
+License
+Apache 2.0
+```
+</file>
+
+<file path="rustfmt.toml">
+edition = "2021"
+max_width = 100
+use_field_init_shorthand = true
+use_small_heuristics = "Max"
+</file>
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "commonjs",
+    "lib": ["ES2019"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "outDir": "./dist",
+    "rootDir": "./",
+    "types": ["mocha", "chai", "node"]
+  },
+  "include": ["tests/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+</file>
+
+</files>
