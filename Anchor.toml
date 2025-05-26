@@ -3,7 +3,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-haio_vesting = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+haio_vesting = "haioKagCB5SF5AgX8g4iLWp45KPyajyS9fVLJ1xGTvz"
+
+[programs.devnet]
+haio_vesting = "haioKagCB5SF5AgX8g4iLWp45KPyajyS9fVLJ1xGTvz"
 
 [registry]
 url = "https://api.apr.dev"

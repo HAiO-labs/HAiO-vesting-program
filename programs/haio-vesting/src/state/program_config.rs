@@ -1,5 +1,3 @@
-// programs/haio-vesting/src/state/program_config.rs
-
 use anchor_lang::prelude::*;
 use crate::constants::DISCRIMINATOR_SIZE;
 
@@ -20,8 +18,6 @@ pub struct ProgramConfig {
 }
 
 impl ProgramConfig {
-    // Option<Pubkey> is 1 (for Some/None) + 32 (for Pubkey if Some) = 33 bytes
-    // Option<i64> is 1 (for Some/None) + 8 (for i64 if Some) = 9 bytes
     pub const LEN: usize = DISCRIMINATOR_SIZE
         + 32 // admin
         + 32 // distribution_hub
