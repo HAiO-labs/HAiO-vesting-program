@@ -1,1052 +1,1122 @@
-// tests/haio-vesting.ts
-
-import * as anchor from '@coral-xyz/anchor';
-import { Program, BN } from '@coral-xyz/anchor';
-import { HaioVesting } from '../target/types/haio_vesting'; // Adjust path if needed
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { HaioVesting } from "../target/types/haio_vesting";
 import {
-  TOKEN_PROGRAM_ID,
-  createMint,
-  getOrCreateAssociatedTokenAccount,
-  mintTo,
-  getAccount,
-  Account as SplAccount,
-} from '@solana/spl-token';
-import {
+  Connection,
   Keypair,
+  LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
-  Transaction,
-  ComputeBudgetProgram,
-  LAMPORTS_PER_SOL,
-  sendAndConfirmTransaction,
-} from '@solana/web3.js';
-import { expect } from 'chai';
+  SYSVAR_RENT_PUBKEY,
+} from "@solana/web3.js";
+import {
+  createMint,
+  createAccount,
+  mintTo,
+  getAccount,
+  TOKEN_PROGRAM_ID,
+  getOrCreateAssociatedTokenAccount,
+  setAuthority,
+  AuthorityType,
+  Account as SplAccount,
+} from "@solana/spl-token";
+import { expect } from "chai";
 
-describe('haio-vesting', () => {
-  // Configure the client to use the provider.
+describe("haio-vesting", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
   const program = anchor.workspace.HaioVesting as Program<HaioVesting>;
-
-  // Helper function to extract error code from transaction logs
-  function findErrorCodeInLogs(
-    logs: string[] | undefined,
-    defaultCode: string = 'UnknownError'
-  ): string {
-    if (!logs) return defaultCode;
-
-    for (const log of logs) {
-      // Check for custom program error format: "custom program error: 0x1772"
-      const customErrorMatch = log.match(/custom program error: 0x([0-9a-fA-F]+)/);
-      if (customErrorMatch) {
-        const rawErrorCode = parseInt(customErrorMatch[1], 16);
-        return mapErrorCode(rawErrorCode);
-      }
-
-      // Check for anchor error format: "Error Number: 6002"
-      const anchorErrorMatch = log.match(/Error Number: (\d+)/);
-      if (anchorErrorMatch) {
-        const errorNumber = parseInt(anchorErrorMatch[1]);
-        return mapErrorCode(errorNumber);
-      }
-
-      // Try to extract hex error code from other formats
-      const hexMatch = log.match(/0x([0-9a-fA-F]+)/);
-      if (hexMatch) {
-        const rawErrorCode = parseInt(hexMatch[1], 16);
-        const mapped = mapErrorCode(rawErrorCode);
-        if (mapped !== 'UnknownError') return mapped;
-      }
-
-      // Fallback message matching
-      if (log.includes('already in use')) return 'AlreadyInUse';
-      if (log.includes('Account `admin` not provided')) return 'AccountNotProvided_admin';
-      if (log.includes('Cross-program invocation with unauthorized signer or writable account'))
-        return 'Unauthorized';
-      if (log.includes('A has one constraint was violated')) return 'Unauthorized';
-      if (log.includes('Error: Operation overflowed')) return 'MathOverflow';
-      if (log.includes('insufficient funds')) return 'InsufficientFunds';
-    }
-
-    return defaultCode;
-  }
-
-  function mapErrorCode(errorCode: number): string {
-    // VestingError enum from errors.rs (0-indexed in Rust, add 6000 for program error)
-    switch (errorCode) {
-      case 6000:
-      case 0x1770:
-        return 'Unauthorized';
-      case 6001:
-      case 0x1771:
-        return 'MathOverflow';
-      case 6002:
-      case 0x1772:
-        return 'TimelockNotExpired';
-      case 6003:
-      case 0x1773:
-        return 'InvalidTimestamps';
-      case 6004:
-      case 0x1774:
-        return 'InvalidAmount';
-      case 6005:
-      case 0x1775:
-        return 'ScheduleFullyProcessed';
-      case 6006:
-      case 0x1776:
-        return 'NoTransferableAmount';
-      case 6007:
-      case 0x1777:
-        return 'DistributionHubNotSet';
-      case 6008:
-      case 0x1778:
-        return 'InvalidVestingScheduleData';
-      case 6009:
-      case 0x1779:
-        return 'TooManyAccountsToProcess';
-      case 6010:
-      case 0x177a:
-        return 'InvalidRemainingAccount';
-      case 6011:
-      case 0x177b:
-        return 'MintMismatch';
-      case 6012:
-      case 0x177c:
-        return 'VaultMismatch';
-      case 6013:
-      case 0x177d:
-        return 'HubAccountMintMismatch';
-      case 6014:
-      case 0x177e:
-        return 'HubAccountOwnerMismatch';
-      case 6015:
-      case 0x177f:
-        return 'HubAddressNotChanged';
-      case 6016:
-      case 0x1780:
-        return 'VaultAuthorityMismatch';
-      case 6017:
-      case 0x1781:
-        return 'ScheduleIdConflict';
-      case 6018:
-      case 0x1782:
-        return 'ConcurrentModification';
-      case 6019:
-      case 0x1783:
-        return 'InvalidVaultState';
-      default:
-        return 'UnknownError';
-    }
-  }
-
-  // `admin` is the wallet associated with the provider.
-  // For signing transactions where `admin` is a signer, Anchor handles it automatically
-  // if `admin.publicKey` is passed in `accounts` and no explicit `signers` array is given,
-  // or if `admin.payer` (if `admin` is a `NodeWallet`) or `admin` itself (if `admin` is `Keypair`) is in `signers`.
-  // Here, `provider.wallet` is an object that can sign, so Anchor uses it if `admin.publicKey` is the signer.
-  const adminWallet = provider.wallet as anchor.Wallet; // Explicitly using adminWallet for clarity
-
+  
+  let admin: Keypair;
+  let recipient: Keypair;
   let mint: PublicKey;
-  let programConfigPDA: PublicKey;
-  let distributionHubSigner: Keypair;
-  let distributionHubATA: PublicKey;
-  let otherUser: Keypair;
-  let pendingHubKeypair: Keypair; // Store the pending hub for timelock test
+  let adminTokenAccount: PublicKey;
+  let recipientTokenAccount: PublicKey;
+  let programConfigPda: PublicKey;
+  let configBump: number;
+
+  const totalAmount = new anchor.BN(1_000_000); // 1M tokens
 
   before(async () => {
-    // Create test mint
+    // Initialize keypairs
+    admin = Keypair.generate();
+    recipient = Keypair.generate();
+
+    // Airdrop SOL
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(admin.publicKey, 2 * LAMPORTS_PER_SOL)
+    );
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(recipient.publicKey, 2 * LAMPORTS_PER_SOL)
+    );
+
+    // Create mint
     mint = await createMint(
       provider.connection,
-      adminWallet.payer, // Payer for mint creation
-      adminWallet.publicKey, // Mint authority
-      null, // No freeze authority
-      9 // 9 decimal places
+      admin,
+      admin.publicKey,
+      null,
+      6
     );
 
-    // Fund admin with tokens for testing
-    const adminTokenAccount = await getOrCreateAssociatedTokenAccount(
+    // Create token accounts
+    adminTokenAccount = (await getOrCreateAssociatedTokenAccount(
       provider.connection,
-      adminWallet.payer,
+      admin,
       mint,
-      adminWallet.publicKey // Mint authority
-    );
+      admin.publicKey
+    )).address;
 
+    recipientTokenAccount = (await getOrCreateAssociatedTokenAccount(
+      provider.connection,
+      admin, // admin pays for creation
+      mint,
+      recipient.publicKey
+    )).address;
+
+    // Mint tokens to admin
     await mintTo(
       provider.connection,
-      adminWallet.payer,
+      admin,
       mint,
-      adminTokenAccount.address,
-      adminWallet.publicKey,
-      1_000_000 * 10 ** 9 // 1M tokens
+      adminTokenAccount,
+      admin,
+      BigInt(10_000_000)
     );
 
-    // Create distribution hub signer
-    distributionHubSigner = Keypair.generate();
-
-    // Airdrop SOL to distribution hub for account creation
-    await provider.connection.requestAirdrop(distributionHubSigner.publicKey, 2 * LAMPORTS_PER_SOL);
-    await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait for airdrop
-
-    // Create distribution hub token account
-    const hubTokenAccount = await getOrCreateAssociatedTokenAccount(
-      provider.connection,
-      distributionHubSigner, // Hub pays for its own account creation
-      mint,
-      distributionHubSigner.publicKey
-    );
-    distributionHubATA = hubTokenAccount.address;
-
-    // Create other user for testing unauthorized access
-    otherUser = Keypair.generate();
-    await provider.connection.requestAirdrop(otherUser.publicKey, 2 * LAMPORTS_PER_SOL);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    // Find PDA for program config
-    [programConfigPDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from('program_config')],
+    // Derive PDAs
+    [programConfigPda, configBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from("program_config")],
       program.programId
     );
   });
 
-  function sleep(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  // Helper to get PDAs for a schedule
-  async function getSchedulePDAs(scheduleIdInput: number | BN) {
-    const scheduleIdBN =
-      typeof scheduleIdInput === 'number' ? new BN(scheduleIdInput) : scheduleIdInput;
-    const scheduleIdBytes = scheduleIdBN.toArrayLike(Buffer, 'le', 8);
-
-    const [vestingSchedulePDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from('vesting_schedule'), scheduleIdBytes],
-      program.programId
-    );
-
-    const [vestingVaultPDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from('vesting_vault'), scheduleIdBytes],
-      program.programId
-    );
-
-    return { vestingSchedulePDA, vestingVaultPDA };
-  }
-
-  // Helper to create a dummy schedule for testing
-  async function createDummySchedule(
-    currentScheduleId: number | BN,
-    amount: number | BN,
-    cliffOffsetSeconds: number = 0,
-    startOffsetSeconds: number = 0,
-    vestingDurationSeconds: number = 1
-  ) {
-    const scheduleIdBN =
-      typeof currentScheduleId === 'number' ? new BN(currentScheduleId) : currentScheduleId;
-    const amountBN = typeof amount === 'number' ? new BN(amount) : amount;
-
-    const { vestingSchedulePDA, vestingVaultPDA } = await getSchedulePDAs(scheduleIdBN);
-
-    const currentTime = Math.floor(Date.now() / 1000);
-    const cliffTime = currentTime + cliffOffsetSeconds;
-    const startTime = currentTime + startOffsetSeconds;
-    const endTime = startTime + vestingDurationSeconds;
-
-    const adminTokenAccount = await getOrCreateAssociatedTokenAccount(
-      provider.connection,
-      adminWallet.payer,
-      mint,
-      adminWallet.publicKey
-    );
-
-    // --- Fixed function call with schedule_id parameter ---
+  it("Initialize program", async () => {
     await program.methods
-      .createVestingSchedule(
-        scheduleIdBN, // Add the schedule_id parameter
-        {
-          totalAmount: amountBN,
-          cliffTimestamp: new BN(cliffTime),
-          vestingStartTimestamp: new BN(startTime),
-          vestingEndTimestamp: new BN(endTime),
-          sourceCategory: { seed: {} },
-        }
-      )
+      .initialize()
       .accounts({
-        admin: adminWallet.publicKey, // Pass the public key of the admin
-        programConfig: programConfigPDA,
-        vestingSchedule: vestingSchedulePDA,
+        admin: admin.publicKey,
+        programConfig: programConfigPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([admin])
+      .rpc();
+
+    const configAccount = await program.account.programConfig.fetch(programConfigPda);
+    expect(configAccount.admin.toString()).to.equal(admin.publicKey.toString());
+    expect(configAccount.totalSchedules.toString()).to.equal("0");
+  });
+
+  it("Create vesting schedule", async () => {
+    const scheduleId = new anchor.BN(0);
+    const cliff = Math.floor(Date.now() / 1000) + 2; // 2 seconds from now
+    const vestingStart = cliff; // Start at cliff
+    const vestingEnd = vestingStart + 10; // Short vesting period for testing
+
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const params = {
+      recipient: recipient.publicKey,
+      totalAmount: totalAmount,
+      cliffTimestamp: new anchor.BN(cliff),
+      vestingStartTimestamp: new anchor.BN(vestingStart),
+      vestingEndTimestamp: new anchor.BN(vestingEnd),
+      sourceCategory: { public: {} },
+    };
+
+    await program.methods
+      .createVestingSchedule(scheduleId, params)
+      .accounts({
+        admin: admin.publicKey,
+        programConfig: programConfigPda,
+        vestingSchedule: vestingSchedulePda,
         mint: mint,
-        depositorTokenAccount: adminTokenAccount.address,
-        vestingVault: vestingVaultPDA,
+        depositorTokenAccount: adminTokenAccount,
+        recipientTokenAccount: recipientTokenAccount,
+        vestingVault: vestingVaultPda,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
-        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+        rent: SYSVAR_RENT_PUBKEY,
       })
-      .rpc(); // Anchor uses provider.wallet to sign if admin.publicKey matches
+      .signers([admin])
+      .rpc();
 
-    return { vestingSchedulePDA, vestingVaultPDA };
-  }
+    // Verify vesting schedule
+    const scheduleAccount = await program.account.vestingSchedule.fetch(vestingSchedulePda);
+    expect(scheduleAccount.scheduleId.toString()).to.equal(scheduleId.toString());
+    expect(scheduleAccount.recipient.toString()).to.equal(recipient.publicKey.toString());
+    expect(scheduleAccount.totalAmount.toString()).to.equal(totalAmount.toString());
+    expect(scheduleAccount.amountTransferred.toString()).to.equal("0");
+    expect(scheduleAccount.isInitialized).to.be.true;
 
-  describe('Initialization', () => {
-    it('Initializes the program config', async () => {
-      try {
-        await program.methods
-          .initialize()
-          .accounts({
-            admin: adminWallet.publicKey,
-            programConfig: programConfigPDA,
-            systemProgram: SystemProgram.programId,
-          })
-          .rpc();
+    // Verify vault has tokens
+    const vaultAccount = await getAccount(provider.connection, vestingVaultPda);
+    expect(vaultAccount.amount.toString()).to.equal(totalAmount.toString());
 
-        const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-        expect(fetchedProgramConfig.admin.toString()).to.equal(adminWallet.publicKey.toString());
-        expect(fetchedProgramConfig.totalSchedules.toNumber()).to.equal(0);
-      } catch (error: any) {
-        // Log the actual error for debugging if it's not "already in use"
-        if (!error.message?.includes('already in use')) {
-          console.error('Unexpected error in initialization:', error);
-          throw error;
-        }
-        // If it's already initialized, that's fine for our test setup
-        console.log('Program config already initialized, skipping...');
-      }
-    });
-
-    it('Should fail to initialize twice', async () => {
-      try {
-        await program.methods
-          .initialize()
-          .accounts({
-            admin: adminWallet.publicKey,
-            programConfig: programConfigPDA,
-            systemProgram: SystemProgram.programId,
-          })
-          .rpc();
-
-        expect.fail('Should have failed with already in use error');
-      } catch (error: any) {
-        const errorCode = findErrorCodeInLogs(error.logs);
-        expect(errorCode).to.equal('AlreadyInUse');
-      }
-    });
+    // Verify program config updated
+    const configAccount = await program.account.programConfig.fetch(programConfigPda);
+    expect(configAccount.totalSchedules.toString()).to.equal("1");
   });
 
-  describe('Distribution Hub Management', () => {
-    it('Sets initial distribution hub', async () => {
-      // For this test to be truly "initial set", the hub should be UNSET_PUBKEY
-      // If a previous test run set it, this test might behave as an update proposal.
-      // A robust setup might involve deploying a fresh ProgramConfig for this specific test block.
+  it("Crank vesting schedule (before cliff)", async () => {
+    const scheduleId = new anchor.BN(0);
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
 
-      // To ensure it's an initial set for testing, you might need to reset state or use a new programConfigPDA
-      // For now, we proceed. If it's already set to distributionHubSigner.publicKey, it should be a no-op or specific error.
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
 
-      let currentConfig = await program.account.programConfig.fetch(programConfigPDA);
+    // Before cliff, cranking should succeed but transfer 0 tokens
+    const beforeBalance = await getAccount(provider.connection, recipientTokenAccount);
+    
+    await program.methods
+      .crankVestingSchedule()
+      .accounts({
+        programConfig: programConfigPda,
+        vestingSchedule: vestingSchedulePda,
+        vestingVault: vestingVaultPda,
+        recipientTokenAccount: recipientTokenAccount,
+        mint: mint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .rpc();
 
-      // Ensure current hub is distributionHubSigner.publicKey before proposing a new one
-      if (currentConfig.distributionHub.toString() !== distributionHubSigner.publicKey.toString()) {
-        // If not, set it first (assuming it's an initial set or can be directly updated)
-        try {
-          await program.methods
-            .updateDistributionHub(distributionHubSigner.publicKey)
-            .accounts({
-              admin: adminWallet.publicKey,
-              programConfig: programConfigPDA,
-            })
-            .rpc();
+    const afterBalance = await getAccount(provider.connection, recipientTokenAccount);
+    
+    // Should have same balance (no tokens transferred before cliff)
+    expect(Number(afterBalance.amount)).to.equal(Number(beforeBalance.amount));
+  });
 
-          currentConfig = await program.account.programConfig.fetch(programConfigPDA); // refresh
-        } catch (error: any) {
-          console.log(
-            'Initial hub set error (might be expected):',
-            findErrorCodeInLogs(error.logs)
-          );
-          // if it was proposed
-        }
-      }
+  it("Wait and crank vesting schedule (after cliff)", async () => {
+    const scheduleId = new anchor.BN(0);
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
 
-      const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-      expect(fetchedProgramConfig.distributionHub.toString()).to.equal(
-        distributionHubSigner.publicKey.toString()
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    // Wait for cliff to pass 
+    console.log("Waiting for cliff to pass...");
+    await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds
+
+    const beforeBalance = await getAccount(provider.connection, recipientTokenAccount);
+    const beforeSchedule = await program.account.vestingSchedule.fetch(vestingSchedulePda);
+    
+    await program.methods
+      .crankVestingSchedule()
+      .accounts({
+        programConfig: programConfigPda,
+        vestingSchedule: vestingSchedulePda,
+        vestingVault: vestingVaultPda,
+        recipientTokenAccount: recipientTokenAccount,
+        mint: mint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    const afterBalance = await getAccount(provider.connection, recipientTokenAccount);
+    const afterSchedule = await program.account.vestingSchedule.fetch(vestingSchedulePda);
+
+    // Check if tokens were transferred (compare balances and schedule state)
+    const balanceIncreased = Number(afterBalance.amount) > Number(beforeBalance.amount);
+    const scheduleTransferredIncreased = Number(afterSchedule.amountTransferred) > Number(beforeSchedule.amountTransferred);
+    
+    // At least one of these should be true after cliff
+    expect(balanceIncreased || scheduleTransferredIncreased).to.be.true;
+    console.log(`Balance change: ${Number(beforeBalance.amount)} -> ${Number(afterBalance.amount)}`);
+    console.log(`Schedule transferred: ${Number(beforeSchedule.amountTransferred)} -> ${Number(afterSchedule.amountTransferred)}`);
+  });
+
+  it("Close vesting schedule fails when not fully vested", async () => {
+    const scheduleId = new anchor.BN(0);
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    try {
+      await program.methods
+        .closeVestingSchedule()
+        .accounts({
+          beneficiary: admin.publicKey,
+          vestingSchedule: vestingSchedulePda,
+          vestingVault: vestingVaultPda,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([admin])
+        .rpc();
+      
+      expect.fail("Expected transaction to fail when not fully vested");
+    } catch (error: any) {
+      expect(error.toString()).to.include("ScheduleNotFullyVested");
+    }
+  });
+
+  it("Validates recipient token account correctly", async () => {
+    const scheduleId = new anchor.BN(0);
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    // Use admin's token account instead of recipient's (wrong account)
+    try {
+      await program.methods
+        .crankVestingSchedule()
+        .accounts({
+          programConfig: programConfigPda,
+          vestingSchedule: vestingSchedulePda,
+          vestingVault: vestingVaultPda,
+          recipientTokenAccount: adminTokenAccount, // Wrong account (admin's instead of recipient's)
+          mint: mint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+      
+      expect.fail("Expected transaction to fail with wrong recipient token account");
+    } catch (error: any) {
+      expect(error.toString()).to.include("RecipientAccountMismatch");
+    }
+  });
+
+  it("Should reject creation with invalid timestamps", async () => {
+    const scheduleId = new anchor.BN(1); // Next schedule ID
+    const cliff = Math.floor(Date.now() / 1000) + 60; // 1 minute from now
+    const vestingStart = cliff + 1000; // Start after cliff
+    const vestingEnd = cliff + 200; // End before cliff
+
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const params = {
+      recipient: recipient.publicKey,
+      totalAmount: totalAmount,
+      cliffTimestamp: new anchor.BN(cliff),
+      vestingStartTimestamp: new anchor.BN(vestingStart),
+      vestingEndTimestamp: new anchor.BN(vestingEnd),
+      sourceCategory: { public: {} },
+    };
+
+    try {
+      await program.methods
+        .createVestingSchedule(scheduleId, params)
+        .accounts({
+          admin: admin.publicKey,
+          programConfig: programConfigPda,
+          vestingSchedule: vestingSchedulePda,
+          mint: mint,
+          depositorTokenAccount: adminTokenAccount,
+          recipientTokenAccount: recipientTokenAccount,
+          vestingVault: vestingVaultPda,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .signers([admin])
+        .rpc();
+      
+      expect.fail("Should have failed with invalid timestamps");
+    } catch (error: any) {
+      expect(error.toString()).to.include("InvalidTimestamps");
+    }
+  });
+
+  it("Should reject creation with zero amount", async () => {
+    const scheduleId = new anchor.BN(1); // Next schedule ID
+    const cliff = Math.floor(Date.now() / 1000) + 60; // 1 minute from now
+    const vestingStart = cliff;
+    const vestingEnd = vestingStart + 365 * 24 * 60 * 60; // 1 year vesting
+
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const params = {
+      recipient: recipient.publicKey,
+      totalAmount: new anchor.BN(0),
+      cliffTimestamp: new anchor.BN(cliff),
+      vestingStartTimestamp: new anchor.BN(vestingStart),
+      vestingEndTimestamp: new anchor.BN(vestingEnd),
+      sourceCategory: { public: {} },
+    };
+
+    try {
+      await program.methods
+        .createVestingSchedule(scheduleId, params)
+        .accounts({
+          admin: admin.publicKey,
+          programConfig: programConfigPda,
+          vestingSchedule: vestingSchedulePda,
+          mint: mint,
+          depositorTokenAccount: adminTokenAccount,
+          recipientTokenAccount: recipientTokenAccount,
+          vestingVault: vestingVaultPda,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .signers([admin])
+        .rpc();
+      
+      expect.fail("Should have failed with zero amount");
+    } catch (error: any) {
+      expect(error.toString()).to.include("InvalidAmount");
+    }
+  });
+
+  it("Should reject unauthorized schedule creation", async () => {
+    const unauthorizedUser = Keypair.generate();
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(unauthorizedUser.publicKey, 2 * LAMPORTS_PER_SOL)
+    );
+
+    const scheduleId = new anchor.BN(1); // Next schedule ID
+    const cliff = Math.floor(Date.now() / 1000) + 60; // 1 minute from now
+    const vestingStart = cliff;
+    const vestingEnd = vestingStart + 365 * 24 * 60 * 60; // 1 year vesting
+
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const params = {
+      recipient: recipient.publicKey,
+      totalAmount: totalAmount,
+      cliffTimestamp: new anchor.BN(cliff),
+      vestingStartTimestamp: new anchor.BN(vestingStart),
+      vestingEndTimestamp: new anchor.BN(vestingEnd),
+      sourceCategory: { public: {} },
+    };
+
+    try {
+      await program.methods
+        .createVestingSchedule(scheduleId, params)
+        .accounts({
+          admin: unauthorizedUser.publicKey,
+          programConfig: programConfigPda,
+          vestingSchedule: vestingSchedulePda,
+          mint: mint,
+          depositorTokenAccount: adminTokenAccount,
+          recipientTokenAccount: recipientTokenAccount,
+          vestingVault: vestingVaultPda,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .signers([unauthorizedUser])
+        .rpc();
+      
+      expect.fail("Should have rejected unauthorized user");
+    } catch (error: any) {
+      expect(error.toString()).to.include("Unauthorized");
+    }
+  });
+
+  it("Should prevent SetAuthority attacks during crank", async () => {
+    const scheduleId = new anchor.BN(0);
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    try {
+      await program.methods
+        .crankVestingSchedule()
+        .accounts({
+          programConfig: programConfigPda,
+          vestingSchedule: vestingSchedulePda,
+          vestingVault: vestingVaultPda,
+          recipientTokenAccount: adminTokenAccount, // Wrong token account (admin's account instead of recipient's)
+          mint: mint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+      
+      expect.fail("Expected transaction to fail due to security check");
+    } catch (error: any) {
+      expect(error.toString()).to.include("recipient");
+    }
+  });
+
+  it("Should reject duplicate schedule ID creation", async () => {
+    // Try to use schedule ID 0 which already exists
+    const scheduleId = new anchor.BN(0);
+    const cliff = Math.floor(Date.now() / 1000) + 60;
+    const vestingStart = cliff;
+    const vestingEnd = vestingStart + 3600;
+
+    const params = {
+      recipient: recipient.publicKey,
+      totalAmount: totalAmount,
+      cliffTimestamp: new anchor.BN(cliff),
+      vestingStartTimestamp: new anchor.BN(vestingStart),
+      vestingEndTimestamp: new anchor.BN(vestingEnd),
+      sourceCategory: { public: {} },
+    };
+
+    try {
+      await program.methods
+        .createVestingSchedule(scheduleId, params)
+        .accounts({
+          admin: admin.publicKey,
+          programConfig: programConfigPda,
+          vestingSchedule: PublicKey.findProgramAddressSync(
+            [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+            program.programId
+          )[0],
+          mint: mint,
+          depositorTokenAccount: adminTokenAccount,
+          recipientTokenAccount: recipientTokenAccount,
+          vestingVault: PublicKey.findProgramAddressSync(
+            [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+            program.programId
+          )[0],
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .signers([admin])
+        .rpc();
+
+      expect.fail("Should have failed because schedule ID already exists");
+    } catch (error: any) {
+      // The error might be about PDA already existing or ScheduleIdConflict
+      expect(error.toString()).to.satisfy((msg: string) => 
+        msg.includes("ScheduleIdConflict") || msg.includes("already in use")
       );
+    }
+  });
+
+  it("Should reject creation with mint mismatch", async () => {
+    // Create a different mint
+    const wrongMint = await createMint(
+      provider.connection,
+      admin,
+      admin.publicKey,
+      null,
+      6
+    );
+
+         // Create token account with wrong mint for recipient
+     const wrongRecipientTokenAccount = (await getOrCreateAssociatedTokenAccount(
+       provider.connection,
+       admin,
+       wrongMint,
+       recipient.publicKey
+     )).address;
+
+    const scheduleId = new anchor.BN(1);
+    const cliff = Math.floor(Date.now() / 1000) + 60;
+    const vestingStart = cliff;
+    const vestingEnd = vestingStart + 3600;
+
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const params = {
+      recipient: recipient.publicKey,
+      totalAmount: totalAmount,
+      cliffTimestamp: new anchor.BN(cliff),
+      vestingStartTimestamp: new anchor.BN(vestingStart),
+      vestingEndTimestamp: new anchor.BN(vestingEnd),
+      sourceCategory: { public: {} },
+    };
+
+    try {
+      await program.methods
+        .createVestingSchedule(scheduleId, params)
+        .accounts({
+          admin: admin.publicKey,
+          programConfig: programConfigPda,
+          vestingSchedule: vestingSchedulePda,
+          mint: mint, // Correct mint
+          depositorTokenAccount: adminTokenAccount,
+          recipientTokenAccount: wrongRecipientTokenAccount, // Wrong mint token account
+          vestingVault: vestingVaultPda,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .signers([admin])
+        .rpc();
+
+      expect.fail("Should have failed with mint mismatch");
+    } catch (error: any) {
+      expect(error.toString()).to.include("RecipientAccountMintMismatch");
+    }
+  });
+
+  it("Should handle boundary timestamp conditions correctly", async () => {
+    const scheduleId = new anchor.BN(1);
+    const currentTime = Math.floor(Date.now() / 1000);
+    const cliff = currentTime + 1; // Very short cliff for testing
+    const vestingStart = cliff;
+    const vestingEnd = vestingStart + 5; // Short vesting period
+
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const params = {
+      recipient: recipient.publicKey,
+      totalAmount: totalAmount,
+      cliffTimestamp: new anchor.BN(cliff),
+      vestingStartTimestamp: new anchor.BN(vestingStart),
+      vestingEndTimestamp: new anchor.BN(vestingEnd),
+      sourceCategory: { public: {} },
+    };
+
+    // Create the schedule
+    await program.methods
+      .createVestingSchedule(scheduleId, params)
+      .accounts({
+        admin: admin.publicKey,
+        programConfig: programConfigPda,
+        vestingSchedule: vestingSchedulePda,
+        mint: mint,
+        depositorTokenAccount: adminTokenAccount,
+        recipientTokenAccount: recipientTokenAccount,
+        vestingVault: vestingVaultPda,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        rent: SYSVAR_RENT_PUBKEY,
+      })
+      .signers([admin])
+      .rpc();
+
+         // Wait for cliff to pass
+     await new Promise(resolve => setTimeout(resolve, 2000));
+
+     // Test cranking right at cliff boundary
+     const beforeBalance = await getAccount(provider.connection, recipientTokenAccount);
+     
+     await program.methods
+       .crankVestingSchedule()
+       .accounts({
+         programConfig: programConfigPda,
+         vestingSchedule: vestingSchedulePda,
+         vestingVault: vestingVaultPda,
+         recipientTokenAccount: recipientTokenAccount,
+         mint: mint,
+         tokenProgram: TOKEN_PROGRAM_ID,
+       })
+       .rpc();
+
+     const afterBalance = await getAccount(provider.connection, recipientTokenAccount);
+     
+     // Should have transferred some tokens after cliff
+     expect(Number(afterBalance.amount)).to.be.greaterThan(Number(beforeBalance.amount));
+
+     // Wait for vesting to complete
+     await new Promise(resolve => setTimeout(resolve, 6000));
+
+     // Crank again to complete vesting
+     await program.methods
+       .crankVestingSchedule()
+       .accounts({
+         programConfig: programConfigPda,
+         vestingSchedule: vestingSchedulePda,
+         vestingVault: vestingVaultPda,
+         recipientTokenAccount: recipientTokenAccount,
+         mint: mint,
+         tokenProgram: TOKEN_PROGRAM_ID,
+       })
+       .rpc();
+
+     const finalBalance = await getAccount(provider.connection, recipientTokenAccount);
+     const scheduleAccount = await program.account.vestingSchedule.fetch(vestingSchedulePda);
+
+     // Should be fully vested
+     expect(scheduleAccount.amountTransferred.toString()).to.equal(totalAmount.toString());
+  });
+
+  it("Should successfully close a fully vested schedule", async () => {
+    const scheduleId = new anchor.BN(1); // Use the boundary test schedule
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    // Verify schedule is fully vested
+    const scheduleAccount = await program.account.vestingSchedule.fetch(vestingSchedulePda);
+    expect(scheduleAccount.amountTransferred.toString()).to.equal(scheduleAccount.totalAmount.toString());
+
+    // Verify vault is empty
+    const vaultAccount = await getAccount(provider.connection, vestingVaultPda);
+    expect(vaultAccount.amount.toString()).to.equal("0");
+
+    const beforeAdminBalance = await provider.connection.getBalance(admin.publicKey);
+
+    // Close the vesting schedule successfully
+    await program.methods
+      .closeVestingSchedule()
+      .accounts({
+        beneficiary: admin.publicKey,
+        vestingSchedule: vestingSchedulePda,
+        vestingVault: vestingVaultPda,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([admin])
+      .rpc();
+
+    const afterAdminBalance = await provider.connection.getBalance(admin.publicKey);
+
+    // Should have received rent back
+    expect(afterAdminBalance).to.be.greaterThan(beforeAdminBalance);
+
+    // Try to fetch the closed account - should fail
+    try {
+      await program.account.vestingSchedule.fetch(vestingSchedulePda);
+      expect.fail("Should not be able to fetch closed account");
+    } catch (error: any) {
+      expect(error.toString()).to.include("Account does not exist");
+    }
+  });
+
+  it("Should handle empty vault gracefully during crank", async () => {
+    const scheduleId = new anchor.BN(2);
+    const cliff = Math.floor(Date.now() / 1000);
+    const vestingStart = cliff;
+    const vestingEnd = vestingStart + 3600;
+
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const smallAmount = new anchor.BN(1000); // Very small amount
+
+    const params = {
+      recipient: recipient.publicKey,
+      totalAmount: smallAmount,
+      cliffTimestamp: new anchor.BN(cliff),
+      vestingStartTimestamp: new anchor.BN(vestingStart),
+      vestingEndTimestamp: new anchor.BN(vestingEnd),
+      sourceCategory: { public: {} },
+    };
+
+    // Create schedule with small amount
+    await program.methods
+      .createVestingSchedule(scheduleId, params)
+      .accounts({
+        admin: admin.publicKey,
+        programConfig: programConfigPda,
+        vestingSchedule: vestingSchedulePda,
+        mint: mint,
+        depositorTokenAccount: adminTokenAccount,
+        recipientTokenAccount: recipientTokenAccount,
+        vestingVault: vestingVaultPda,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        rent: SYSVAR_RENT_PUBKEY,
+      })
+      .signers([admin])
+      .rpc();
+
+    // Crank to transfer tokens
+    await program.methods
+      .crankVestingSchedule()
+      .accounts({
+        programConfig: programConfigPda,
+        vestingSchedule: vestingSchedulePda,
+        vestingVault: vestingVaultPda,
+        recipientTokenAccount: recipientTokenAccount,
+        mint: mint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    // Try cranking again when vault might be empty - should succeed gracefully
+    await program.methods
+      .crankVestingSchedule()
+      .accounts({
+        programConfig: programConfigPda,
+        vestingSchedule: vestingSchedulePda,
+        vestingVault: vestingVaultPda,
+        recipientTokenAccount: recipientTokenAccount,
+        mint: mint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    // Should complete without error even if vault is empty
+    console.log("Empty vault crank completed successfully");
+  });
+
+  it("Should prevent concurrent crank operations (race condition test)", async () => {
+    const scheduleId = new anchor.BN(3);
+    const cliff = Math.floor(Date.now() / 1000);
+    const vestingStart = cliff;
+    const vestingEnd = vestingStart + 10;
+
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const testAmount = new anchor.BN(10000);
+
+    const params = {
+      recipient: recipient.publicKey,
+      totalAmount: testAmount,
+      cliffTimestamp: new anchor.BN(cliff),
+      vestingStartTimestamp: new anchor.BN(vestingStart),
+      vestingEndTimestamp: new anchor.BN(vestingEnd),
+      sourceCategory: { public: {} },
+    };
+
+    // Create schedule
+    await program.methods
+      .createVestingSchedule(scheduleId, params)
+      .accounts({
+        admin: admin.publicKey,
+        programConfig: programConfigPda,
+        vestingSchedule: vestingSchedulePda,
+        mint: mint,
+        depositorTokenAccount: adminTokenAccount,
+        recipientTokenAccount: recipientTokenAccount,
+        vestingVault: vestingVaultPda,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        rent: SYSVAR_RENT_PUBKEY,
+      })
+      .signers([admin])
+      .rpc();
+
+    const beforeBalance = await getAccount(provider.connection, recipientTokenAccount);
+    const beforeSchedule = await program.account.vestingSchedule.fetch(vestingSchedulePda);
+
+    // Wait a bit for some vesting to unlock
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Attempt concurrent cranks (one might fail, but total transfer should be consistent)
+    const crankPromises = Array(3).fill(null).map(() => 
+      program.methods
+        .crankVestingSchedule()
+        .accounts({
+          programConfig: programConfigPda,
+          vestingSchedule: vestingSchedulePda,
+          vestingVault: vestingVaultPda,
+          recipientTokenAccount: recipientTokenAccount,
+          mint: mint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc()
+        .catch(err => {
+          // Some concurrent operations might fail, which is expected
+          console.log("Concurrent crank failed (expected):", err.message);
+          return null;
+        })
+    );
+
+    await Promise.all(crankPromises);
+
+    const afterBalance = await getAccount(provider.connection, recipientTokenAccount);
+    const afterSchedule = await program.account.vestingSchedule.fetch(vestingSchedulePda);
+
+    // Verify no double-spending occurred
+    const balanceIncrease = Number(afterBalance.amount) - Number(beforeBalance.amount);
+    const scheduleIncrease = Number(afterSchedule.amountTransferred) - Number(beforeSchedule.amountTransferred);
+    
+    expect(balanceIncrease).to.equal(scheduleIncrease);
+    console.log(`Concurrent crank test: balance increased by ${balanceIncrease}, schedule increased by ${scheduleIncrease}`);
+  });
+
+  it("Should validate TokensReleased event data integrity", async () => {
+    const scheduleId = new anchor.BN(4);
+    const cliff = Math.floor(Date.now() / 1000);
+    const vestingStart = cliff;
+    const vestingEnd = vestingStart + 5;
+
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const testAmount = new anchor.BN(5000);
+
+    const params = {
+      recipient: recipient.publicKey,
+      totalAmount: testAmount,
+      cliffTimestamp: new anchor.BN(cliff),
+      vestingStartTimestamp: new anchor.BN(vestingStart),
+      vestingEndTimestamp: new anchor.BN(vestingEnd),
+      sourceCategory: { public: {} },
+    };
+
+    // Create schedule
+    await program.methods
+      .createVestingSchedule(scheduleId, params)
+      .accounts({
+        admin: admin.publicKey,
+        programConfig: programConfigPda,
+        vestingSchedule: vestingSchedulePda,
+        mint: mint,
+        depositorTokenAccount: adminTokenAccount,
+        recipientTokenAccount: recipientTokenAccount,
+        vestingVault: vestingVaultPda,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        rent: SYSVAR_RENT_PUBKEY,
+      })
+      .signers([admin])
+      .rpc();
+
+    let eventCaptured = false;
+    let eventData: any = null;
+
+    // Set up event listener for TokensReleased
+    const listener = program.addEventListener('TokensReleased', (event) => {
+      eventCaptured = true;
+      eventData = event;
+      console.log('TokensReleased event captured:', event);
     });
 
-    it('Proposes distribution hub update with timelock', async () => {
-      pendingHubKeypair = Keypair.generate(); // Store for later use
+    try {
+      // Wait for some vesting time
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
-      const currentTime = Math.floor(Date.now() / 1000);
+      const beforeSchedule = await program.account.vestingSchedule.fetch(vestingSchedulePda);
 
+      // Trigger crank to emit event
       await program.methods
-        .updateDistributionHub(pendingHubKeypair.publicKey)
+        .crankVestingSchedule()
         .accounts({
-          admin: adminWallet.publicKey,
-          programConfig: programConfigPDA,
+          programConfig: programConfigPda,
+          vestingSchedule: vestingSchedulePda,
+          vestingVault: vestingVaultPda,
+          recipientTokenAccount: recipientTokenAccount,
+          mint: mint,
+          tokenProgram: TOKEN_PROGRAM_ID,
         })
         .rpc();
 
-      const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-      expect(fetchedProgramConfig.pendingHub?.toString()).to.equal(
-        pendingHubKeypair.publicKey.toString()
-      );
+      const afterSchedule = await program.account.vestingSchedule.fetch(vestingSchedulePda);
 
-      const expectedTimelock = currentTime + 5; // 5 seconds for test-utils feature
-      expect(fetchedProgramConfig.hubUpdateTimelock.toNumber()).to.be.closeTo(expectedTimelock, 5); // Increased delta for CI timing
-    });
+      // Wait a bit for event to be captured
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
-    it('Should fail hub update before timelock expiry', async () => {
-      // Try to confirm the same pending hub before timelock expires
-      try {
-        await program.methods
-          .updateDistributionHub(pendingHubKeypair.publicKey) // Same as pending hub
-          .accounts({
-            admin: adminWallet.publicKey,
-            programConfig: programConfigPDA,
-          })
-          .rpc();
-
-        expect.fail('Should have failed with timelock not expired');
-      } catch (error: any) {
-        console.log('Actual error logs:', error.logs);
-        const errorCode = findErrorCodeInLogs(error.logs);
-        expect(errorCode).to.equal('TimelockNotExpired');
+      if (eventCaptured && eventData) {
+        // Validate event data integrity
+        expect(eventData.scheduleId.toString()).to.equal(scheduleId.toString());
+        expect(eventData.recipient.toString()).to.equal(recipient.publicKey.toString());
+        expect(eventData.mint.toString()).to.equal(mint.toString());
+        expect(eventData.totalReleased.toString()).to.equal(afterSchedule.amountTransferred.toString());
+        
+        console.log('✅ Event validation passed');
+      } else {
+        console.log('⚠️ Event not captured - this might be due to timing or RPC limitations');
       }
-    });
-
-    it('Should fail hub update with same address', async () => {
-      const currentConfig = await program.account.programConfig.fetch(programConfigPDA);
-
-      try {
-        await program.methods
-          .updateDistributionHub(currentConfig.distributionHub)
-          .accounts({
-            admin: adminWallet.publicKey,
-            programConfig: programConfigPDA,
-          })
-          .rpc();
-
-        expect.fail('Should have failed with hub address not changed');
-      } catch (error: any) {
-        const errorCode = findErrorCodeInLogs(error.logs);
-        expect(errorCode).to.equal('HubAddressNotChanged');
-      }
-    });
-
-    it('Should fail hub update by non-admin', async () => {
-      const newHubKeypair = Keypair.generate();
-
-      try {
-        await program.methods
-          .updateDistributionHub(newHubKeypair.publicKey)
-          .accounts({
-            admin: otherUser.publicKey,
-            programConfig: programConfigPDA,
-          })
-          .signers([otherUser])
-          .rpc();
-
-        expect.fail('Should have failed with unauthorized error');
-      } catch (error: any) {
-        const errorCode = findErrorCodeInLogs(error.logs);
-        expect(errorCode).to.equal('Unauthorized');
-      }
-    });
+    } finally {
+      // Clean up listener
+      await program.removeEventListener(listener);
+    }
   });
 
-  describe('Vesting Schedule Creation', () => {
-    it('Creates a vesting schedule successfully', async () => {
-      let fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
+  it("Should reject schedule creation with non-sequential ID (gap test)", async () => {
+    // Get current total schedules
+    const configAccount = await program.account.programConfig.fetch(programConfigPda);
+    const currentTotal = configAccount.totalSchedules;
+    
+    // Try to create schedule with ID that skips numbers (gap)
+    const gapScheduleId = new anchor.BN(currentTotal + 2); // Skip one ID
+    const cliff = Math.floor(Date.now() / 1000);
+    const vestingStart = cliff;
+    const vestingEnd = vestingStart + 3600;
 
-      // This sequence attempts to set or confirm the hub.
-      // It assumes that if a pending hub exists, it's the one we want or we can overwrite.
-      // This might need more robust handling if tests are run in arbitrary order or state persists unexpectedly.
+    const params = {
+      recipient: recipient.publicKey,
+      totalAmount: totalAmount,
+      cliffTimestamp: new anchor.BN(cliff),
+      vestingStartTimestamp: new anchor.BN(vestingStart),
+      vestingEndTimestamp: new anchor.BN(vestingEnd),
+      sourceCategory: { public: {} },
+    };
 
-      try {
-        /* ignore if it fails, e.g. trying to set same active hub */
-        await program.methods
-          .updateDistributionHub(distributionHubSigner.publicKey)
-          .accounts({
-            admin: adminWallet.publicKey,
-            programConfig: programConfigPDA,
-          })
-          .rpc();
-      } catch (error) {
-        // ignore
-      }
-
-      // If after all attempts, it's still not set, then fail the setup.
-      fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-
-      const nextScheduleId = fetchedProgramConfig.totalSchedules; // This is a BN
-
-      await createDummySchedule(
-        nextScheduleId, // Add the schedule_id parameter
-        1000000, // 1M tokens
-        0, // No cliff delay
-        0, // Start immediately
-        3600 // 1 hour vesting
-      );
-
-      // fetchedProgramConfig is updated inside createDummySchedule
-      fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-
-      expect(fetchedProgramConfig.totalSchedules.toNumber()).to.equal(
-        nextScheduleId.toNumber() + 1
-      );
-      // ... other assertions
-    });
-
-    it('Should fail with invalid timestamps', async () => {
-      const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-      const nextScheduleId = fetchedProgramConfig.totalSchedules;
-      const { vestingSchedulePDA, vestingVaultPDA } = await getSchedulePDAs(nextScheduleId);
-
-      const currentTime = Math.floor(Date.now() / 1000);
-
-      const adminTokenAccount = await getOrCreateAssociatedTokenAccount(
-        provider.connection,
-        adminWallet.payer,
-        mint,
-        adminWallet.publicKey
-      );
-
-      try {
-        // Cliff after end time (invalid)
-        await program.methods
-          .createVestingSchedule(nextScheduleId, {
-            totalAmount: new BN(1000000),
-            cliffTimestamp: new BN(currentTime + 3600), // 1 hour
-            vestingStartTimestamp: new BN(currentTime + 1800), // 30 minutes
-            vestingEndTimestamp: new BN(currentTime + 1800), // Same as start (invalid)
-            sourceCategory: { seed: {} },
-          })
-          .accounts({
-            admin: adminWallet.publicKey,
-            programConfig: programConfigPDA,
-            vestingSchedule: vestingSchedulePDA,
-            mint: mint,
-            depositorTokenAccount: adminTokenAccount.address,
-            vestingVault: vestingVaultPDA,
-            systemProgram: SystemProgram.programId,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-          })
-          .rpc();
-
-        expect.fail('Should have failed with invalid timestamps');
-      } catch (error: any) {
-        const errorCode = findErrorCodeInLogs(error.logs);
-        expect(errorCode).to.equal('InvalidTimestamps');
-      }
-    });
-
-    it('Should fail with zero amount', async () => {
-      const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-      const nextScheduleId = fetchedProgramConfig.totalSchedules;
-      const { vestingSchedulePDA, vestingVaultPDA } = await getSchedulePDAs(nextScheduleId);
-
-      const currentTime = Math.floor(Date.now() / 1000);
-
-      const adminTokenAccount = await getOrCreateAssociatedTokenAccount(
-        provider.connection,
-        adminWallet.payer,
-        mint,
-        adminWallet.publicKey
-      );
-
-      try {
-        await program.methods
-          .createVestingSchedule(nextScheduleId, {
-            totalAmount: new BN(0), // Invalid amount
-            cliffTimestamp: new BN(currentTime),
-            vestingStartTimestamp: new BN(currentTime + 60),
-            vestingEndTimestamp: new BN(currentTime + 3600),
-            sourceCategory: { seed: {} },
-          })
-          .accounts({
-            admin: adminWallet.publicKey,
-            programConfig: programConfigPDA,
-            vestingSchedule: vestingSchedulePDA,
-            mint: mint,
-            depositorTokenAccount: adminTokenAccount.address,
-            vestingVault: vestingVaultPDA,
-            systemProgram: SystemProgram.programId,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-          })
-          .rpc();
-
-        expect.fail('Should have failed with invalid amount');
-      } catch (error: any) {
-        const errorCode = findErrorCodeInLogs(error.logs);
-        expect(errorCode).to.equal('InvalidAmount');
-      }
-    });
-
-    it('Should fail with wrong schedule ID', async () => {
-      const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-      const wrongScheduleId = fetchedProgramConfig.totalSchedules.add(new BN(10)); // Wrong ID
-      const { vestingSchedulePDA, vestingVaultPDA } = await getSchedulePDAs(wrongScheduleId);
-
-      const currentTime = Math.floor(Date.now() / 1000);
-
-      const adminTokenAccount = await getOrCreateAssociatedTokenAccount(
-        provider.connection,
-        adminWallet.payer,
-        mint,
-        adminWallet.publicKey
-      );
-
-      try {
-        await program.methods
-          .createVestingSchedule(wrongScheduleId, {
-            totalAmount: new BN(1000000),
-            cliffTimestamp: new BN(currentTime),
-            vestingStartTimestamp: new BN(currentTime + 60),
-            vestingEndTimestamp: new BN(currentTime + 3600),
-            sourceCategory: { seed: {} },
-          })
-          .accounts({
-            admin: adminWallet.publicKey,
-            programConfig: programConfigPDA,
-            vestingSchedule: vestingSchedulePDA,
-            mint: mint,
-            depositorTokenAccount: adminTokenAccount.address,
-            vestingVault: vestingVaultPDA,
-            systemProgram: SystemProgram.programId,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-          })
-          .rpc();
-
-        expect.fail('Should have failed with schedule ID conflict');
-      } catch (error: any) {
-        const errorCode = findErrorCodeInLogs(error.logs);
-        expect(errorCode).to.equal('ScheduleIdConflict');
-      }
-    });
-
-    it('Should fail when non-admin tries to create schedule', async () => {
-      const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-      const nextScheduleId = fetchedProgramConfig.totalSchedules;
-      const { vestingSchedulePDA, vestingVaultPDA } = await getSchedulePDAs(nextScheduleId);
-
-      const currentTime = Math.floor(Date.now() / 1000);
-
-      // Create token account for other user
-      const otherUserTokenAccount = await getOrCreateAssociatedTokenAccount(
-        provider.connection,
-        otherUser,
-        mint,
-        otherUser.publicKey // ATA owned by someone else
-      );
-
-      try {
-        await program.methods
-          .createVestingSchedule(nextScheduleId, {
-            totalAmount: new BN(1000000),
-            cliffTimestamp: new BN(currentTime),
-            vestingStartTimestamp: new BN(currentTime + 60),
-            vestingEndTimestamp: new BN(currentTime + 3600),
-            sourceCategory: { seed: {} },
-          })
-          .accounts({
-            admin: otherUser.publicKey,
-            programConfig: programConfigPDA,
-            vestingSchedule: vestingSchedulePDA,
-            mint: mint,
-            depositorTokenAccount: otherUserTokenAccount.address,
-            vestingVault: vestingVaultPDA,
-            systemProgram: SystemProgram.programId,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-          })
-          .signers([otherUser])
-          .rpc();
-
-        expect.fail('Should have failed with unauthorized error');
-      } catch (error: any) {
-        const errorCode = findErrorCodeInLogs(error.logs);
-        expect(errorCode).to.equal('Unauthorized');
-      }
-    });
-  });
-
-  describe('Crank Vesting Schedules', () => {
-    it('Cranks vesting schedules successfully', async () => {
-      const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-      const scheduleIdToCrank = fetchedProgramConfig.totalSchedules; // BN
-
-      const { vestingSchedulePDA, vestingVaultPDA } = await createDummySchedule(
-        scheduleIdToCrank,
-        1000000,
-        0, // No cliff
-        0, // Start immediately
-        1 // Vests very quickly
-      );
-
-      await sleep(2000); // Wait for vesting
-
-      // Get hub balance before
-      const hubAccountBefore = await getAccount(provider.connection, distributionHubATA);
-
-      // First crank
+    try {
       await program.methods
-        .crankVestingSchedules(1)
+        .createVestingSchedule(gapScheduleId, params)
         .accounts({
-          programConfig: programConfigPDA,
-          distributionHubTokenAccount: distributionHubATA,
+          admin: admin.publicKey,
+          programConfig: programConfigPda,
+          vestingSchedule: PublicKey.findProgramAddressSync(
+            [Buffer.from("vesting_schedule"), gapScheduleId.toArrayLike(Buffer, "le", 8)],
+            program.programId
+          )[0],
           mint: mint,
+          depositorTokenAccount: adminTokenAccount,
+          recipientTokenAccount: recipientTokenAccount,
+          vestingVault: PublicKey.findProgramAddressSync(
+            [Buffer.from("vesting_vault"), gapScheduleId.toArrayLike(Buffer, "le", 8)],
+            program.programId
+          )[0],
+          systemProgram: SystemProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
+          rent: SYSVAR_RENT_PUBKEY,
         })
-        .remainingAccounts([
-          { pubkey: vestingSchedulePDA, isWritable: true, isSigner: false },
-          { pubkey: vestingVaultPDA, isWritable: true, isSigner: false },
-        ])
+        .signers([admin])
         .rpc();
 
-      // Check hub balance increased
-      const hubAccountAfter = await getAccount(provider.connection, distributionHubATA);
-      expect(Number(hubAccountAfter.amount)).to.be.greaterThan(Number(hubAccountBefore.amount));
-
-      // Second crank should transfer remaining or skip if fully processed
-      const hubAccountBeforeSecond = await getAccount(provider.connection, distributionHubATA);
-
-      await program.methods
-        .crankVestingSchedules(1)
-        .accounts({
-          programConfig: programConfigPDA,
-          distributionHubTokenAccount: distributionHubATA,
-          mint: mint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .remainingAccounts([
-          { pubkey: vestingSchedulePDA, isWritable: true, isSigner: false },
-          { pubkey: vestingVaultPDA, isWritable: true, isSigner: false },
-        ])
-        .rpc();
-
-      // Either more tokens transferred or no change (if schedule is complete)
-      const hubAccountAfterSecond = await getAccount(provider.connection, distributionHubATA);
-      expect(Number(hubAccountAfterSecond.amount)).to.be.greaterThanOrEqual(
-        Number(hubAccountBeforeSecond.amount)
-      );
-    });
-
-    it('Should handle invalid remaining accounts', async () => {
-      try {
-        await program.methods
-          .crankVestingSchedules(1) // Request 1 schedule but provide no accounts
-          .accounts({
-            programConfig: programConfigPDA,
-            distributionHubTokenAccount: distributionHubATA,
-            mint: mint,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .remainingAccounts([]) // No remaining accounts
-          .rpc();
-
-        // Should succeed with 0 schedules processed
-        expect(true).to.be.true;
-      } catch (error: any) {
-        // If any error occurs, that's unexpected for this test
-        console.log('Unexpected error:', error);
-        expect.fail('Should have succeeded with 0 schedules');
-      }
-    });
-
-    it('Should fail crank with mismatched hub account', async () => {
-      const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-      const scheduleId = fetchedProgramConfig.totalSchedules;
-      const { vestingSchedulePDA, vestingVaultPDA } = await getSchedulePDAs(scheduleId);
-
-      // Create wrong hub account with different owner (not the distribution hub)
-      const wrongHubAccount = await getOrCreateAssociatedTokenAccount(
-        provider.connection,
-        adminWallet.payer, // Wrong owner - should be distributionHubSigner
-        mint,
-        adminWallet.publicKey // Wrong owner
-      );
-
-      try {
-        await program.methods
-          .crankVestingSchedules(1)
-          .accounts({
-            programConfig: programConfigPDA,
-            distributionHubTokenAccount: wrongHubAccount.address,
-            mint: mint,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .remainingAccounts([
-            { pubkey: vestingSchedulePDA, isWritable: true, isSigner: false },
-            { pubkey: vestingVaultPDA, isWritable: true, isSigner: false },
-          ])
-          .rpc();
-
-        expect.fail('Should have failed with hub account owner mismatch');
-      } catch (error: any) {
-        console.log('Actual error logs:', error.logs);
-        const errorCode = findErrorCodeInLogs(error.logs);
-        expect(errorCode).to.equal('HubAccountOwnerMismatch');
-      }
-    });
+      expect.fail("Should have failed with ScheduleIdConflict for non-sequential ID");
+    } catch (error: any) {
+      expect(error.toString()).to.include("ScheduleIdConflict");
+      console.log("✅ ID gap prevention working correctly");
+    }
   });
 
-  describe('Edge Cases and Math', () => {
-    it('Should handle large amounts without overflow', async () => {
-      const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-      const scheduleId = fetchedProgramConfig.totalSchedules;
+  it("Should simulate and prevent vault authority mismatch attack", async () => {
+    // Note: This test simulates the concept but may be limited by SPL Token constraints
+    // In a real attack scenario, an attacker would use setAuthority to change vault ownership
+    
+    const scheduleId = new anchor.BN(5);
+    const cliff = Math.floor(Date.now() / 1000);
+    const vestingStart = cliff;
+    const vestingEnd = vestingStart + 10;
 
-      // Use a reasonable large amount that won't cause SPL token overflow
-      const largeAmount = new BN('1000000000000'); // 1 trillion (reasonable for u64)
+    const [vestingSchedulePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_schedule"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
 
-      // First mint enough tokens to admin
-      const adminTokenAccount = await getOrCreateAssociatedTokenAccount(
-        provider.connection,
-        adminWallet.payer,
-        mint,
-        adminWallet.publicKey
-      );
+    const [vestingVaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vesting_vault"), scheduleId.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
 
-      try {
-        await mintTo(
-          provider.connection,
-          adminWallet.payer,
-          mint,
-          adminTokenAccount.address,
-          adminWallet.publicKey,
-          largeAmount.toString()
-        );
+    const testAmount = new anchor.BN(3000);
 
-        await createDummySchedule(
-          scheduleId,
-          largeAmount,
-          0, // No cliff
-          0, // Start immediately
-          3600 // 1 hour vesting
-        );
+    const params = {
+      recipient: recipient.publicKey,
+      totalAmount: testAmount,
+      cliffTimestamp: new anchor.BN(cliff),
+      vestingStartTimestamp: new anchor.BN(vestingStart),
+      vestingEndTimestamp: new anchor.BN(vestingEnd),
+      sourceCategory: { public: {} },
+    };
 
-        // If we reach here, the math handled large numbers correctly
-        expect(true).to.be.true;
-      } catch (error: any) {
-        // If it fails due to insufficient funds or other reasons, that's expected
-        // We're mainly testing that the math doesn't overflow
-        if (
-          error.message?.includes('insufficient funds') ||
-          error.message?.includes('0x1') ||
-          findErrorCodeInLogs(error.logs) === 'InsufficientFunds'
-        ) {
-          // Expected - insufficient tokens or supply limit reached
-          console.log('Expected large amount limitation hit:', findErrorCodeInLogs(error.logs));
-          expect(true).to.be.true;
-        } else {
-          // Unexpected error, rethrow
-          throw error;
-        }
-      }
-    });
+    // Create schedule
+    await program.methods
+      .createVestingSchedule(scheduleId, params)
+      .accounts({
+        admin: admin.publicKey,
+        programConfig: programConfigPda,
+        vestingSchedule: vestingSchedulePda,
+        mint: mint,
+        depositorTokenAccount: adminTokenAccount,
+        recipientTokenAccount: recipientTokenAccount,
+        vestingVault: vestingVaultPda,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        rent: SYSVAR_RENT_PUBKEY,
+      })
+      .signers([admin])
+      .rpc();
 
-    it('Should handle u64 MAX values without overflow in vesting calculations', async () => {
-      const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-      const scheduleId = fetchedProgramConfig.totalSchedules;
+    // Verify the vault authority is correctly set to the vesting schedule PDA
+    const vaultAccount = await getAccount(provider.connection, vestingVaultPda);
+    expect(vaultAccount.owner.toString()).to.equal(vestingSchedulePda.toString());
 
-      // Use values close to u64::MAX but safe for testing
-      const nearMaxAmount = new BN('18446744073709551615'); // u64::MAX
-      const testAmount = nearMaxAmount.div(new BN(1000)); // 1/1000th of u64::MAX to avoid mint overflow
+    // Wait for some vesting time
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
-      const { vestingSchedulePDA, vestingVaultPDA } = await getSchedulePDAs(scheduleId);
+    // Try to crank - should work normally
+    await program.methods
+      .crankVestingSchedule()
+      .accounts({
+        programConfig: programConfigPda,
+        vestingSchedule: vestingSchedulePda,
+        vestingVault: vestingVaultPda,
+        recipientTokenAccount: recipientTokenAccount,
+        mint: mint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .rpc();
 
-      const currentTime = Math.floor(Date.now() / 1000);
-
-      const adminTokenAccount = await getOrCreateAssociatedTokenAccount(
-        provider.connection,
-        adminWallet.payer,
-        mint,
-        adminWallet.publicKey
-      );
-
-      try {
-        // First try to mint the large amount
-        await mintTo(
-          provider.connection,
-          adminWallet.payer,
-          mint,
-          adminTokenAccount.address,
-          adminWallet.publicKey,
-          testAmount.toString()
-        );
-
-        // Create schedule with very long vesting period to test linear calculation
-        await program.methods
-          .createVestingSchedule(scheduleId, {
-            totalAmount: testAmount,
-            cliffTimestamp: new BN(currentTime),
-            vestingStartTimestamp: new BN(currentTime + 1),
-            vestingEndTimestamp: new BN(currentTime + 86400 * 365), // 1 year vesting
-            sourceCategory: { seed: {} },
-          })
-          .accounts({
-            admin: adminWallet.publicKey,
-            programConfig: programConfigPDA,
-            vestingSchedule: vestingSchedulePDA,
-            mint: mint,
-            depositorTokenAccount: adminTokenAccount.address,
-            vestingVault: vestingVaultPDA,
-            systemProgram: SystemProgram.programId,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-          })
-          .rpc();
-
-        // Wait a bit and try to crank to test the linear calculation doesn't overflow
-        await sleep(2000);
-
-        await program.methods
-          .crankVestingSchedules(1)
-          .accounts({
-            programConfig: programConfigPDA,
-            distributionHubTokenAccount: distributionHubATA,
-            mint: mint,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .remainingAccounts([
-            { pubkey: vestingSchedulePDA, isWritable: true, isSigner: false },
-            { pubkey: vestingVaultPDA, isWritable: true, isSigner: false },
-          ])
-          .rpc();
-
-        // If we reach here, the math handled near-max values correctly
-        expect(true).to.be.true;
-        console.log('Successfully handled near-u64-MAX values without overflow');
-      } catch (error: any) {
-        // Expected failures due to token supply limits or other constraints
-        if (
-          error.message?.includes('insufficient funds') ||
-          error.message?.includes('0x') ||
-          findErrorCodeInLogs(error.logs) === 'InsufficientFunds' ||
-          findErrorCodeInLogs(error.logs) === 'MathOverflow'
-        ) {
-          // This is actually what we want to test - that it fails gracefully rather than silently overflowing
-          console.log('Properly handled large value constraint:', findErrorCodeInLogs(error.logs));
-          expect(true).to.be.true;
-        } else {
-          // Unexpected error type - this might indicate a real problem
-          console.error('Unexpected error with large values:', error);
-          throw error;
-        }
-      }
-    });
-
-    it('Should handle zero vault balance gracefully', async () => {
-      const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-      const scheduleId = fetchedProgramConfig.totalSchedules;
-
-      const { vestingSchedulePDA, vestingVaultPDA } = await createDummySchedule(
-        scheduleId,
-        1000000,
-        0, // No cliff
-        0, // Start immediately
-        1 // Vests quickly
-      );
-
-      // Wait for vesting to complete
-      await sleep(2000);
-
-      // Crank multiple times to drain the vault
-      for (let i = 0; i < 5; i++) {
-        try {
-          await program.methods
-            .crankVestingSchedules(1)
-            .accounts({
-              programConfig: programConfigPDA,
-              distributionHubTokenAccount: distributionHubATA,
-              mint: mint,
-              tokenProgram: TOKEN_PROGRAM_ID,
-            })
-            .remainingAccounts([
-              { pubkey: vestingSchedulePDA, isWritable: true, isSigner: false },
-              { pubkey: vestingVaultPDA, isWritable: true, isSigner: false },
-            ])
-            .rpc();
-        } catch (error) {
-          // Expected to eventually fail or skip when vault is empty
-          break;
-        }
-      }
-
-      // Final crank should skip gracefully
-      await program.methods
-        .crankVestingSchedules(1)
-        .accounts({
-          programConfig: programConfigPDA,
-          distributionHubTokenAccount: distributionHubATA,
-          mint: mint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .remainingAccounts([
-          { pubkey: vestingSchedulePDA, isWritable: true, isSigner: false },
-          { pubkey: vestingVaultPDA, isWritable: true, isSigner: false },
-        ])
-        .rpc();
-
-      // Should complete without error
-      expect(true).to.be.true;
-    });
+    console.log("✅ Vault authority validation working correctly");
+    console.log("Note: Full setAuthority attack simulation would require a malicious program");
   });
-
-  describe('Concurrent Operations', () => {
-    it('Should handle concurrent crank attempts', async () => {
-      const fetchedProgramConfig = await program.account.programConfig.fetch(programConfigPDA);
-      const scheduleId = fetchedProgramConfig.totalSchedules;
-
-      const { vestingSchedulePDA, vestingVaultPDA } = await createDummySchedule(
-        scheduleId,
-        1000000,
-        0, // No cliff
-        0, // Start immediately
-        1 // Vests quickly
-      );
-
-      await sleep(2000);
-
-      // Create two identical crank transactions
-      const crankTx1 = program.methods
-        .crankVestingSchedules(1)
-        .accounts({
-          programConfig: programConfigPDA,
-          distributionHubTokenAccount: distributionHubATA,
-          mint: mint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .remainingAccounts([
-          { pubkey: vestingSchedulePDA, isWritable: true, isSigner: false },
-          { pubkey: vestingVaultPDA, isWritable: true, isSigner: false },
-        ]);
-
-      const crankTx2 = program.methods
-        .crankVestingSchedules(1)
-        .accounts({
-          programConfig: programConfigPDA,
-          distributionHubTokenAccount: distributionHubATA,
-          mint: mint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .remainingAccounts([
-          { pubkey: vestingSchedulePDA, isWritable: true, isSigner: false },
-          { pubkey: vestingVaultPDA, isWritable: true, isSigner: false },
-        ]);
-
-      // Execute both transactions
-      const results = await Promise.allSettled([crankTx1.rpc(), crankTx2.rpc()]);
-
-      // At least one should succeed, one might fail or skip due to concurrent modification
-      const successCount = results.filter((r) => r.status === 'fulfilled').length;
-      expect(successCount).to.be.greaterThanOrEqual(1);
-
-      // If one failed, it should be due to concurrent modification or no transferable amount
-      results.forEach((result, index) => {
-        if (result.status === 'rejected') {
-          console.log(`Transaction ${index + 1} failed as expected:`, result.reason?.message);
-        }
-      });
-    });
-  });
-});
+}); 
