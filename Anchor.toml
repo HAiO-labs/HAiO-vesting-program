@@ -3,25 +3,28 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-haio_vesting = "haioKagCB5SF5AgX8g4iLWp45KPyajyS9fVLJ1xGTvz"
+haio_vesting = "HAio6fPGdLYXaxScRLpPraDtcQcjZYFtbtVThLFJiScs"
 
 [programs.devnet]
-haio_vesting = "haioKagCB5SF5AgX8g4iLWp45KPyajyS9fVLJ1xGTvz"
+haio_vesting = "HAio6fPGdLYXaxScRLpPraDtcQcjZYFtbtVThLFJiScs"
+
+[programs.mainnet]
+haio_vesting = "HAio6fPGdLYXaxScRLpPraDtcQcjZYFtbtVThLFJiScs"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Localnet"
-wallet = "~/.config/solana/id.json"
+#cluster = "Localnet"
+cluster = "devnet"
+#cluster = "mainnet"
+
+wallet = "/Users/nike/.config/solana/keypairs/haio-deployer.json"
 
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 'tests/haio-vesting.ts'"
 
 [test]
 startup_wait = 5000
 shutdown_wait = 2000
 upgradeable = false
-
-# [[test.validator.clone]]
-# address = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
