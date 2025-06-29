@@ -8,9 +8,6 @@ pub enum VestingError {
     #[msg("Math operation overflow.")]
     MathOverflow, // 6001
 
-    #[msg("Timelock has not expired yet.")]
-    TimelockNotExpired, // 6002
-
     #[msg("Invalid timestamp configuration.")]
     InvalidTimestamps, // 6003
 
@@ -23,32 +20,11 @@ pub enum VestingError {
     #[msg("No transferable amount available.")]
     NoTransferableAmount, // 6006
 
-    #[msg("Distribution hub is not set.")]
-    DistributionHubNotSet, // 6007
-
     #[msg("Invalid vesting schedule data.")]
     InvalidVestingScheduleData, // 6008
 
-    #[msg("Too many accounts to process in a single transaction.")]
-    TooManyAccountsToProcess, // 6009
-
-    #[msg("Invalid remaining account provided.")]
-    InvalidRemainingAccount, // 6010
-
     #[msg("Token mint mismatch.")]
     MintMismatch, // 6011
-
-    #[msg("Vault account mismatch.")]
-    VaultMismatch, // 6012
-
-    #[msg("Hub account mint mismatch.")]
-    HubAccountMintMismatch, // 6013
-
-    #[msg("Hub account owner mismatch.")]
-    HubAccountOwnerMismatch, // 6014
-
-    #[msg("Hub address has not changed.")]
-    HubAddressNotChanged, // 6015
 
     #[msg("Vault authority mismatch.")]
     VaultAuthorityMismatch, // 6016
@@ -56,9 +32,24 @@ pub enum VestingError {
     #[msg("Schedule ID conflict.")]
     ScheduleIdConflict, // 6017
 
-    #[msg("Concurrent modification detected.")]
-    ConcurrentModification, // 6018
-
     #[msg("Invalid vault state.")]
     InvalidVaultState, // 6019
+
+    #[msg("Invalid recipient specified.")]
+    InvalidRecipient, // 6022
+    
+    #[msg("Recipient account owner mismatch.")]
+    RecipientAccountOwnerMismatch, // 6023
+    
+    #[msg("Recipient account mint mismatch.")]
+    RecipientAccountMintMismatch, // 6024
+
+    #[msg("Recipient token account does not match the one specified in the schedule.")]
+    RecipientAccountMismatch, // 6025
+
+    #[msg("Vesting schedule is not yet fully vested and cannot be closed.")]
+    ScheduleNotFullyVested, // 6026
+    
+    #[msg("Vesting vault is not empty and cannot be closed.")]
+    VaultNotEmpty, // 6027
 }

@@ -4,18 +4,24 @@ use crate::errors::VestingError;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq)]
 pub enum SourceCategory {
-    Seed,        // 시드 투자자
-    Strategic,   // 전략적 투자자
-    PublicIdo,   // 공개 IDO
-    Team,        // 팀 & 어드바이저
-    Ecosystem,   // 생태계 발전
-    Marketing,   // 마케팅 & 파트너십
+    Public,      // Public Round: 64M HAiO with 6mo linear vesting (16M immediate)
+    Ecosystem,   // Ecosystem: 388.9M HAiO with 36mo linear vesting (11.1M immediate)
+    Team,        // Team & Advisors: 150M HAiO with 6mo cliff + 36mo linear vesting
+    Liquidity,   // Liquidity Provision (CEX/DEX): 100M HAiO immediate distribution
+    Strategic,   // Strategic Partnerships: 50M HAiO immediate distribution
+    Foundation,  // Foundation & Treasury Reserve: 220M HAiO immediate distribution
 }
 
 #[account]
 pub struct VestingSchedule {
     /// Schedule ID, typically an incrementing number from program_config.total_schedules
     pub schedule_id: u64,
+    /// The final beneficiary who will receive the vested tokens
+    /// Note: Recipient change functionality has been removed for enhanced security
+    pub recipient: Pubkey,
+    /// The specific token account of the recipient that will receive the vested tokens
+    /// Note: Recipient change functionality has been removed for enhanced security
+    pub recipient_token_account: Pubkey,
     /// Token mint for this schedule
     pub mint: Pubkey,
     /// Token vault PDA holding tokens for this schedule
@@ -30,7 +36,7 @@ pub struct VestingSchedule {
     pub vesting_start_timestamp: i64,
     /// Vesting end timestamp (Unix timestamp)
     pub vesting_end_timestamp: i64,
-    /// Amount already transferred to the distribution hub
+    /// Amount already transferred to the recipient
     pub amount_transferred: u64,
     /// Source category for fund tracking
     pub source_category: SourceCategory,
@@ -43,6 +49,8 @@ pub struct VestingSchedule {
 impl VestingSchedule {
     pub const LEN: usize = DISCRIMINATOR_SIZE
         + 8 // schedule_id (u64)
+        + 32 // recipient (Pubkey)
+        + 32 // recipient_token_account (Pubkey)
         + 32 // mint (Pubkey)
         + 32 // token_vault (Pubkey)
         + 32 // depositor (Pubkey)
@@ -58,6 +66,8 @@ impl VestingSchedule {
     pub fn init(
         &mut self,
         schedule_id: u64,
+        recipient: Pubkey,
+        recipient_token_account: Pubkey,
         mint: Pubkey,
         token_vault: Pubkey,
         depositor: Pubkey,
@@ -69,6 +79,8 @@ impl VestingSchedule {
         bump: u8,
     ) -> Result<()> {
         self.schedule_id = schedule_id;
+        self.recipient = recipient;
+        self.recipient_token_account = recipient_token_account;
         self.mint = mint;
         self.token_vault = token_vault;
         self.depositor = depositor;
@@ -84,6 +96,7 @@ impl VestingSchedule {
     }
 
     /// Calculate unlocked amount at given timestamp
+    /// Security: Uses checked arithmetic to prevent overflow
     pub fn calculate_unlocked_amount(&self, current_timestamp: i64) -> Result<u64> {
         // Validate initialized state
         if !self.is_initialized {
@@ -136,6 +149,7 @@ impl VestingSchedule {
     }
 
     /// Get amount available to transfer
+    /// Returns the difference between unlocked and already transferred amounts
     pub fn get_transferable_amount(&self, current_timestamp: i64) -> Result<u64> {
         let unlocked_amount = self.calculate_unlocked_amount(current_timestamp)?;
         Ok(unlocked_amount.saturating_sub(self.amount_transferred))

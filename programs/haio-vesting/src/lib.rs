@@ -10,10 +10,28 @@ use state::{ProgramConfig, VestingSchedule, SourceCategory};
 use errors::VestingError;
 use constants::*;
 
-declare_id!("haioKagCB5SF5AgX8g4iLWp45KPyajyS9fVLJ1xGTvz");
+declare_id!("HAio6fPGdLYXaxScRLpPraDtcQcjZYFtbtVThLFJiScs");
+
+/// Security.txt information for on-chain security contact details
+#[cfg(not(feature = "no-entrypoint"))]
+use solana_security_txt::security_txt;
+
+#[cfg(not(feature = "no-entrypoint"))]
+security_txt! {
+    name: "HAiO Vesting Program",
+    project_url: "https://haio.fun",
+    contacts: "email:cto@haio.fun",
+    policy: "We do not pay a bug bounty.",
+    preferred_languages: "en"
+}
+
+// ================================================================================================
+// TYPE DEFINITIONS
+// ================================================================================================
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct CreateVestingScheduleParams {
+    pub recipient: Pubkey,
     pub total_amount: u64,
     pub cliff_timestamp: i64,
     pub vesting_start_timestamp: i64,
@@ -21,11 +39,17 @@ pub struct CreateVestingScheduleParams {
     pub source_category: SourceCategory,
 }
 
+// ================================================================================================
+// ACCOUNT VALIDATION STRUCTURES
+// ================================================================================================
+
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
+    /// Program configuration PDA
+    /// Security: Establishes admin authority for the entire program
     #[account(
         init,
         payer = admin,
@@ -41,9 +65,12 @@ pub struct Initialize<'info> {
 #[derive(Accounts)]
 #[instruction(schedule_id: u64)]
 pub struct CreateVestingSchedule<'info> {
+    /// Admin signer - only admin can create vesting schedules
     #[account(mut)]
     pub admin: Signer<'info>,
 
+    /// Program configuration account
+    /// Security: Validates admin authority
     #[account(
         mut,
         seeds = [PROGRAM_CONFIG_SEED],
@@ -52,6 +79,8 @@ pub struct CreateVestingSchedule<'info> {
     )]
     pub program_config: Account<'info, ProgramConfig>,
 
+    /// Vesting schedule PDA - deterministic address based on schedule_id
+    /// Security: Schedule ID must follow sequential order to prevent gaps
     #[account(
         init,
         payer = admin,
@@ -61,8 +90,11 @@ pub struct CreateVestingSchedule<'info> {
     )]
     pub vesting_schedule: Account<'info, VestingSchedule>,
 
+    /// Token mint account
     pub mint: Account<'info, Mint>,
 
+    /// Source token account from which tokens are deposited
+    /// Security: Must be owned by admin and have correct mint
     #[account(
         mut,
         constraint = depositor_token_account.mint == mint.key() @ VestingError::MintMismatch,
@@ -70,6 +102,15 @@ pub struct CreateVestingSchedule<'info> {
     )]
     pub depositor_token_account: Account<'info, TokenAccount>,
 
+    /// Recipient token account that will receive the vested tokens
+    /// Security: Must have correct mint (owner validation done in instruction)
+    #[account(
+        constraint = recipient_token_account.mint == mint.key() @ VestingError::RecipientAccountMintMismatch
+    )]
+    pub recipient_token_account: Account<'info, TokenAccount>,
+
+    /// Vesting vault PDA that holds the tokens
+    /// Security: Authority is set to vesting_schedule PDA, preventing unauthorized access
     #[account(
         init,
         payer = admin,
@@ -85,44 +126,106 @@ pub struct CreateVestingSchedule<'info> {
     pub rent: Sysvar<'info, Rent>,
 }
 
+/// Individual recipient crank context for direct token transfers
+/// Replaces batch processing with single-schedule processing for enhanced security
 #[derive(Accounts)]
 pub struct CrankVestingSchedules<'info> {
-    #[account(mut)]
+    /// Program configuration - contains admin authority info
+    #[account(
+        seeds = [PROGRAM_CONFIG_SEED],
+        bump = program_config.bump
+    )]
     pub program_config: Account<'info, ProgramConfig>,
 
-    #[account(mut)]
-    pub distribution_hub_token_account: Account<'info, TokenAccount>,
+    /// Vesting schedule that defines the recipient and vesting parameters
+    #[account(
+        mut,
+        seeds = [VESTING_SCHEDULE_SEED, vesting_schedule.schedule_id.to_le_bytes().as_ref()],
+        bump = vesting_schedule.bump
+    )]
+    pub vesting_schedule: Account<'info, VestingSchedule>,
 
-    /// CHECK: This is the mint account, validated by constraint
-    pub mint: UncheckedAccount<'info>,
+    /// Vesting vault that holds the tokens for this specific schedule
+    /// Security: Authority must be the vesting_schedule PDA
+    #[account(
+        mut,
+        seeds = [VESTING_VAULT_SEED, vesting_schedule.schedule_id.to_le_bytes().as_ref()],
+        bump,
+        constraint = vesting_vault.owner == vesting_schedule.key() @ VestingError::VaultAuthorityMismatch,
+        constraint = vesting_vault.mint == vesting_schedule.mint @ VestingError::MintMismatch
+    )]
+    pub vesting_vault: Account<'info, TokenAccount>,
+
+    /// Recipient token account that receives the vested tokens
+    /// Security: Must match the specific account stored in vesting_schedule
+    /// Security: Must have the same mint as the vesting schedule
+    /// Security: Must be owned by the original recipient (prevents SetAuthority attacks)
+    #[account(
+        mut,
+        constraint = recipient_token_account.key() == vesting_schedule.recipient_token_account @ VestingError::RecipientAccountMismatch,
+        constraint = recipient_token_account.mint == vesting_schedule.mint @ VestingError::RecipientAccountMintMismatch,
+        constraint = recipient_token_account.owner == vesting_schedule.recipient @ VestingError::RecipientAccountOwnerMismatch
+    )]
+    pub recipient_token_account: Account<'info, TokenAccount>,
+
+    /// Token mint - validated against vesting schedule
+    #[account(
+        constraint = mint.key() == vesting_schedule.mint @ VestingError::MintMismatch
+    )]
+    pub mint: Account<'info, Mint>,
 
     pub token_program: Program<'info, Token>,
 }
 
+/// Context for closing a fully vested and empty schedule
+/// Security: Strict validation ensures only completed schedules can be closed
 #[derive(Accounts)]
-pub struct UpdateDistributionHub<'info> {
+pub struct CloseVestingSchedule<'info> {
+    /// The account that will receive the rent back, typically the original admin or the recipient.
+    /// Must be the signer of the transaction.
     #[account(mut)]
-    pub admin: Signer<'info>,
+    pub beneficiary: Signer<'info>,
 
+    /// The vesting schedule to be closed.
+    /// Security: Must be fully vested to be closed.
     #[account(
         mut,
-        seeds = [PROGRAM_CONFIG_SEED],
-        bump = program_config.bump,
-        has_one = admin @ VestingError::Unauthorized
+        seeds = [VESTING_SCHEDULE_SEED, vesting_schedule.schedule_id.to_le_bytes().as_ref()],
+        bump = vesting_schedule.bump,
+        constraint = vesting_schedule.amount_transferred >= vesting_schedule.total_amount @ VestingError::ScheduleNotFullyVested,
+        close = beneficiary
     )]
-    pub program_config: Account<'info, ProgramConfig>,
+    pub vesting_schedule: Account<'info, VestingSchedule>,
+
+    /// The vesting vault to be closed.
+    /// Security: Must be empty and belong to the vesting schedule.
+    #[account(
+        mut,
+        seeds = [VESTING_VAULT_SEED, vesting_schedule.schedule_id.to_le_bytes().as_ref()],
+        bump,
+        constraint = vesting_vault.amount == 0 @ VestingError::VaultNotEmpty,
+        constraint = vesting_vault.owner == vesting_schedule.key() @ VestingError::VaultAuthorityMismatch
+    )]
+    pub vesting_vault: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
 }
+
+// ================================================================================================
+// PROGRAM INSTRUCTIONS
+// ================================================================================================
 
 #[program]
 pub mod haio_vesting {
     use super::*;
 
+    /// Initialize the vesting program
+    /// Security: Can only be called once, establishes admin control
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
         let config = &mut ctx.accounts.program_config;
+        
+        // Initialize program state
         config.admin = ctx.accounts.admin.key();
-        config.distribution_hub = Pubkey::default();
-        config.pending_hub = None;
-        config.hub_update_timelock = None;
         config.total_schedules = 0;
         config.bump = ctx.bumps.program_config;
 
@@ -136,6 +239,8 @@ pub mod haio_vesting {
         Ok(())
     }
 
+    /// Create a new vesting schedule with token deposit
+    /// Security: Admin-only, validates timing parameters, enforces sequential schedule IDs
     pub fn create_vesting_schedule(
         ctx: Context<CreateVestingSchedule>,
         schedule_id: u64,
@@ -144,23 +249,45 @@ pub mod haio_vesting {
         let program_config = &mut ctx.accounts.program_config;
         let vesting_schedule_account = &mut ctx.accounts.vesting_schedule;
 
-        // Validate parameters
+        // ================================================================================================
+        // CRITICAL PARAMETER VALIDATIONS
+        // ================================================================================================
+        
+        // Amount validation
         require!(params.total_amount > 0, VestingError::InvalidAmount);
+        
+        // Recipient validation
+        require!(params.recipient != Pubkey::default(), VestingError::InvalidRecipient);
+        
+        // ================================================================================================
+        // CRITICAL SECURITY: RECIPIENT TOKEN ACCOUNT VALIDATION
+        // ================================================================================================
+        
+        // Critical Security Check: Ensure recipient token account is owned by the recipient
+        require!(
+            ctx.accounts.recipient_token_account.owner == params.recipient,
+            VestingError::RecipientAccountOwnerMismatch
+        );
+        
+        // Timing validation - cliff <= start < end
         require!(
             params.cliff_timestamp <= params.vesting_start_timestamp &&
             params.vesting_start_timestamp < params.vesting_end_timestamp,
             VestingError::InvalidTimestamps
         );
 
-        // Verify that the provided schedule_id matches the expected next ID
+        // Sequential ID enforcement - prevents gaps in schedule numbering
         require!(schedule_id == program_config.total_schedules, VestingError::ScheduleIdConflict);
 
-        // Additional validation: Ensure hub is set
-        require!(program_config.distribution_hub != Pubkey::default(), VestingError::DistributionHubNotSet);
-
-        // Initialize vesting schedule state
+        // ================================================================================================
+        // VESTING SCHEDULE INITIALIZATION
+        // ================================================================================================
+        
+        // Initialize vesting schedule state with recipient
         vesting_schedule_account.init(
             schedule_id,
+            params.recipient,
+            ctx.accounts.recipient_token_account.key(),
             ctx.accounts.mint.key(),
             ctx.accounts.vesting_vault.key(),
             ctx.accounts.admin.key(),
@@ -172,7 +299,11 @@ pub mod haio_vesting {
             ctx.bumps.vesting_schedule,
         )?;
 
-        // Transfer tokens from depositor's account to the vesting vault
+        // ================================================================================================
+        // TOKEN DEPOSIT EXECUTION
+        // ================================================================================================
+        
+        // Transfer tokens from admin's account to vesting vault
         let cpi_accounts = Transfer {
             from: ctx.accounts.depositor_token_account.to_account_info(),
             to: ctx.accounts.vesting_vault.to_account_info(),
@@ -183,12 +314,17 @@ pub mod haio_vesting {
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
         token::transfer(cpi_ctx, params.total_amount)?;
 
-        // Increment total schedules count in program_config
-        program_config.total_schedules = program_config.total_schedules.checked_add(1).ok_or(VestingError::MathOverflow)?;
+        // ================================================================================================
+        // STATE UPDATE AND EVENT EMISSION
+        // ================================================================================================
+        
+        // Update program state atomically
+        program_config.increment_total_schedules()?;
 
-        // Emit event
+        // Emit event for tracking
         emit!(VestingScheduleCreated {
             schedule_id,
+            recipient: params.recipient,
             mint: ctx.accounts.mint.key(),
             total_amount: params.total_amount,
             cliff_timestamp: params.cliff_timestamp,
@@ -199,264 +335,207 @@ pub mod haio_vesting {
         });
 
         msg!(
-            "Created vesting schedule {} with {} tokens, cliff at {}, vesting from {} to {}",
-            schedule_id,
-            params.total_amount,
-            params.cliff_timestamp,
-            params.vesting_start_timestamp,
-            params.vesting_end_timestamp
+            "Created vesting schedule {} with {} tokens for recipient {}, cliff at {}, vesting from {} to {}",
+            schedule_id, params.total_amount, params.recipient, params.cliff_timestamp,
+            params.vesting_start_timestamp, params.vesting_end_timestamp
         );
 
         Ok(())
     }
 
-    pub fn crank_vesting_schedules<'info>(
-        ctx: Context<'_, '_, '_, 'info, CrankVestingSchedules<'info>>,
-        num_schedules_to_process: u8,
+    /// Process individual vesting schedule with direct-to-recipient transfer
+    /// Replaces batch processing with single-schedule processing for enhanced security
+    /// Security: Validates recipient account ownership, prevents unauthorized transfers
+    pub fn crank_vesting_schedule(
+        ctx: Context<CrankVestingSchedules>,
     ) -> Result<()> {
-        let program_config = &ctx.accounts.program_config;
-
-        // Get current timestamp
         let current_timestamp = Clock::get()?.unix_timestamp;
 
-        // Prepare account infos for transfer
-        let distribution_hub_token_account_info = ctx.accounts.distribution_hub_token_account.to_account_info();
-        let token_program_info = ctx.accounts.token_program.to_account_info();
+        // Extract values early to avoid borrow conflicts
+        let schedule_id;
+        let recipient;
+        let mint;
+        let source_category;
+        let schedule_bump;
+        let transferable_amount;
+        
+        {
+            let vesting_schedule = &ctx.accounts.vesting_schedule;
+            let vesting_vault = &ctx.accounts.vesting_vault;
 
-        // Validate that distribution hub is set
-        require!(program_config.distribution_hub != Pubkey::default(), VestingError::DistributionHubNotSet);
-
-        require!(
-            ctx.accounts.distribution_hub_token_account.owner == program_config.distribution_hub,
-            VestingError::HubAccountOwnerMismatch
-        );
-
-        // Get remaining accounts (pairs of VestingSchedule and VestingVault)
-        let remaining_accounts_slice = ctx.remaining_accounts;
-
-        // Calculate how many schedules we can process
-        let max_possible_from_remaining = remaining_accounts_slice.len() / 2;
-        let num_schedules_to_process_actual = (num_schedules_to_process as usize)
-            .min(MAX_SCHEDULES_PER_CRANK as usize)
-            .min(max_possible_from_remaining as u8 as usize);
-
-        // Validate remaining accounts count
-        require!(
-            remaining_accounts_slice.len() >= num_schedules_to_process_actual * 2,
-            VestingError::InvalidRemainingAccount
-        );
-
-        // Estimate compute units needed
-        let estimated_cu = BASE_CRANK_COMPUTE_UNITS + (num_schedules_to_process_actual as u32 * COMPUTE_UNITS_PER_SCHEDULE);
-        msg!("Estimated CU needed: {}", estimated_cu);
-
-        let mut schedules_successfully_processed_count: u8 = 0;
-
-        // Process each vesting schedule
-        for i in 0..num_schedules_to_process_actual {
-            let vesting_schedule_index = i * 2;
-            let vesting_vault_index = i * 2 + 1;
-
-            // Validate account indices
-            if vesting_schedule_index >= remaining_accounts_slice.len() || vesting_vault_index >= remaining_accounts_slice.len() {
-                msg!("Invalid remaining account indices for schedule {}", i);
-                continue;
-            }
-
-            let vesting_schedule_info_ref = &remaining_accounts_slice[vesting_schedule_index];
-            let vesting_vault_info_ref = &remaining_accounts_slice[vesting_vault_index];
-
-            // --- Read VestingSchedule data (short borrow) ---
-            let vesting_schedule_account = {
-                let data = vesting_schedule_info_ref.try_borrow_data()?;
-                VestingSchedule::try_deserialize(&mut &data[..])?
-            };
-
-            // Validate schedule is initialized
-            require!(vesting_schedule_account.is_initialized, VestingError::InvalidVestingScheduleData);
-
-            // --- Read TokenAccount for vesting_vault_info (short borrow) ---
-            let vesting_vault_data = {
-                let data = vesting_vault_info_ref.try_borrow_data()?;
-                TokenAccount::try_deserialize(&mut &data[..])?
-            };
+            // ================================================================================================
+            // PRE-FLIGHT SECURITY VALIDATIONS
+            // ================================================================================================
+            
+            // Validate schedule is properly initialized
+            require!(vesting_schedule.is_initialized, VestingError::InvalidVestingScheduleData);
 
             // Validate vault state using IsInitialized trait
-            require!(vesting_vault_data.is_initialized(), VestingError::InvalidVaultState);
+            require!(vesting_vault.is_initialized(), VestingError::InvalidVaultState);
 
-            // --- Security and Consistency Checks ---
-            require_keys_eq!(vesting_vault_data.owner, vesting_schedule_info_ref.key(), VestingError::VaultAuthorityMismatch);
-            require_keys_eq!(vesting_schedule_account.token_vault, vesting_vault_info_ref.key(), VestingError::VaultMismatch);
-            require_keys_eq!(vesting_vault_data.mint, vesting_schedule_account.mint, VestingError::MintMismatch);
-            require_keys_eq!(vesting_schedule_account.mint, ctx.accounts.distribution_hub_token_account.mint, VestingError::HubAccountMintMismatch);
-
-            // Check if schedule is already fully processed
-            if vesting_schedule_account.amount_transferred >= vesting_schedule_account.total_amount {
-                msg!("Schedule {} (ID: {}) already fully processed. Skipping.", vesting_schedule_info_ref.key(), vesting_schedule_account.schedule_id);
-                continue;
+            // ================================================================================================
+            // VESTING LOGIC AND TRANSFER AMOUNT CALCULATION
+            // ================================================================================================
+            
+            // Skip if schedule is already fully processed
+            if vesting_schedule.amount_transferred >= vesting_schedule.total_amount {
+                msg!("Schedule {} already fully processed (transferred: {}, total: {}). Skipping.", 
+                     vesting_schedule.schedule_id, vesting_schedule.amount_transferred, vesting_schedule.total_amount);
+                return Ok(());
             }
 
-            // Calculate transferable amount
-            let transferable_amount = vesting_schedule_account.get_transferable_amount(current_timestamp)?;
+            // Calculate how much can be transferred at current timestamp
+            transferable_amount = vesting_schedule.get_transferable_amount(current_timestamp)?;
 
             if transferable_amount == 0 {
-                msg!("No transferable amount for schedule {} (ID: {}) at timestamp {}. Skipping.", vesting_schedule_info_ref.key(), vesting_schedule_account.schedule_id, current_timestamp);
-                continue;
+                msg!("No transferable amount for schedule {} at timestamp {}. Current cliff: {}, vesting start: {}.", 
+                     vesting_schedule.schedule_id, current_timestamp, 
+                     vesting_schedule.cliff_timestamp, vesting_schedule.vesting_start_timestamp);
+                
+                // Emit event for monitoring consistency even when amount is 0
+                emit!(TokensReleased {
+                    schedule_id: vesting_schedule.schedule_id,
+                    recipient: vesting_schedule.recipient,
+                    mint: vesting_schedule.mint,
+                    amount: 0,
+                    source_category: vesting_schedule.source_category.clone(),
+                    timestamp: current_timestamp,
+                    total_released: vesting_schedule.amount_transferred,
+                });
+                
+                return Ok(());
             }
 
-            // Ensure we don't exceed vault balance
-            let actual_transfer_amount = transferable_amount.min(vesting_vault_data.amount);
-
-            if actual_transfer_amount == 0 {
-                msg!("Vault for schedule {} (ID: {}) is empty or calculated transferable amount is zero after min(). Skipping.", vesting_schedule_info_ref.key(), vesting_schedule_account.schedule_id);
-                continue;
-            }
-
-            // --- Concurrent modification check ---
-            // Re-read the current amount_transferred to detect concurrent modifications
-            let current_amount_transferred = {
-                let data = vesting_schedule_info_ref.try_borrow_data()?;
-                let current_schedule = VestingSchedule::try_deserialize(&mut &data[..])?;
-                current_schedule.amount_transferred
-            };
-
-            // If amount_transferred changed since we first read it, another crank might be processing
-            if current_amount_transferred != vesting_schedule_account.amount_transferred {
-                msg!("Concurrent modification detected for schedule {} (ID: {}). Skipping.", vesting_schedule_info_ref.key(), vesting_schedule_account.schedule_id);
-                continue;
-            }
-
-            // Store values we need later before moving vesting_schedule_account
-            let schedule_id = vesting_schedule_account.schedule_id;
-            let source_category = vesting_schedule_account.source_category.clone();
-            let bump = vesting_schedule_account.bump;
-            let mut vesting_schedule_account_updated = vesting_schedule_account;
-
-            // Create PDA signer seeds for the vesting schedule
-            let schedule_id_bytes = schedule_id.to_le_bytes();
-            let signer_seeds = &[
-                b"vesting_schedule".as_ref(),
-                schedule_id_bytes.as_ref(),
-                &[bump],
-            ];
-            let signer = &[&signer_seeds[..]];
-
-            // Transfer tokens from vesting vault to distribution hub
-            let cpi_accounts = Transfer {
-                from: vesting_vault_info_ref.clone(),
-                to: distribution_hub_token_account_info.clone(),
-                authority: vesting_schedule_info_ref.clone(),
-            };
-            let cpi_ctx = CpiContext::new_with_signer(
-                token_program_info.clone(),
-                cpi_accounts,
-                signer,
-            );
-            token::transfer(cpi_ctx, actual_transfer_amount)?;
-
-            // Update schedule amount_transferred
-            vesting_schedule_account_updated.amount_transferred = vesting_schedule_account_updated.amount_transferred
-                .checked_add(actual_transfer_amount)
-                .ok_or(VestingError::MathOverflow)?;
-
-            // --- Write back updated schedule data (short borrow) ---
-            {
-                let mut data = vesting_schedule_info_ref.try_borrow_mut_data()?;
-                vesting_schedule_account_updated.try_serialize(&mut &mut data[..])?;
-            }
-
-            // Emit event with source category
-            emit!(TokensReleased {
-                schedule_id,
-                mint: vesting_schedule_account_updated.mint,
-                amount: actual_transfer_amount,
-                source_category,
-                timestamp: current_timestamp,
-                total_released: vesting_schedule_account_updated.amount_transferred,
-            });
-
-            msg!(
-                "Released {} tokens from schedule {} (ID: {}) to hub. Total released: {}",
-                actual_transfer_amount,
-                vesting_schedule_info_ref.key(),
-                schedule_id,
-                vesting_schedule_account_updated.amount_transferred
-            );
-
-            schedules_successfully_processed_count = schedules_successfully_processed_count.checked_add(1).ok_or(VestingError::MathOverflow)?;
+            // Extract values for later use
+            schedule_id = vesting_schedule.schedule_id;
+            recipient = vesting_schedule.recipient;
+            mint = vesting_schedule.mint;
+            source_category = vesting_schedule.source_category.clone();
+            schedule_bump = vesting_schedule.bump;
         }
 
-        msg!("Successfully processed {} out of {} attempted vesting schedules in this crank.", schedules_successfully_processed_count, num_schedules_to_process_actual);
-        Ok(())
-    }
+        // Ensure we don't exceed available vault balance
+        let actual_transfer_amount = transferable_amount.min(ctx.accounts.vesting_vault.amount);
 
-    pub fn update_distribution_hub(
-        ctx: Context<UpdateDistributionHub>,
-        new_hub_address: Pubkey,
-    ) -> Result<()> {
-        let config = &mut ctx.accounts.program_config;
-        let current_timestamp = Clock::get()?.unix_timestamp;
-
-        // Case 1: Initial setup (current hub is Pubkey::default())
-        if config.distribution_hub == Pubkey::default() {
-            require!(new_hub_address != Pubkey::default(), VestingError::InvalidAmount);
-            config.distribution_hub = new_hub_address;
+        if actual_transfer_amount == 0 {
+            msg!("Vault for schedule {} is empty (vault balance: {}, calculated transferable: {}). Skipping.", 
+                 schedule_id, ctx.accounts.vesting_vault.amount, transferable_amount);
             
-            emit!(DistributionHubUpdated {
-                old_hub: Pubkey::default(),
-                new_hub: new_hub_address,
+            // Emit event for monitoring consistency even when vault is empty
+            emit!(TokensReleased {
+                schedule_id,
+                recipient,
+                mint,
+                amount: 0,
+                source_category,
+                timestamp: current_timestamp,
+                total_released: ctx.accounts.vesting_schedule.amount_transferred,
             });
-
-            msg!("Distribution hub initialized to: {}", new_hub_address);
+            
             return Ok(());
         }
 
-        // Case 2: Confirming a pending update
-        if let Some(pending_hub_val) = config.pending_hub {
-            if new_hub_address == pending_hub_val {
-                let timelock_expiry = config.hub_update_timelock.ok_or(VestingError::TimelockNotExpired)?;
-                require!(current_timestamp >= timelock_expiry, VestingError::TimelockNotExpired);
+        // ================================================================================================
+        // TOKEN TRANSFER EXECUTION
+        // ================================================================================================
+        
+        // Create PDA signer seeds for the vesting schedule authority
+        let schedule_id_bytes = schedule_id.to_le_bytes();
+        let signer_seeds = &[
+            VESTING_SCHEDULE_SEED,
+            schedule_id_bytes.as_ref(),
+            &[schedule_bump],
+        ];
+        let signer = &[&signer_seeds[..]];
 
-                let old_hub = config.distribution_hub;
-                config.distribution_hub = new_hub_address;
-                config.pending_hub = None;
-                config.hub_update_timelock = None;
+        // Execute token transfer from vault to recipient's token account
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.vesting_vault.to_account_info(),
+            to: ctx.accounts.recipient_token_account.to_account_info(),
+            authority: ctx.accounts.vesting_schedule.to_account_info(),
+        };
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts,
+            signer,
+        );
+        token::transfer(cpi_ctx, actual_transfer_amount)?;
 
-                emit!(DistributionHubUpdated {
-                    old_hub,
-                    new_hub: config.distribution_hub,
-                });
+        // ================================================================================================
+        // STATE UPDATE AND EVENT EMISSION
+        // ================================================================================================
+        
+        // Update schedule amount_transferred atomically
+        let vesting_schedule = &mut ctx.accounts.vesting_schedule;
+        vesting_schedule.amount_transferred = vesting_schedule.amount_transferred
+            .checked_add(actual_transfer_amount)
+            .ok_or(VestingError::MathOverflow)?;
 
-                msg!("Distribution hub updated from {} to: {}", old_hub, config.distribution_hub);
-                return Ok(());
-            }
-        }
-
-        // Case 3: Proposing a new update
-        require!(new_hub_address != config.distribution_hub, VestingError::HubAddressNotChanged);
-        if let Some(pending_hub_val) = config.pending_hub {
-            require!(new_hub_address != pending_hub_val, VestingError::HubAddressNotChanged);
-        }
-
-        config.pending_hub = Some(new_hub_address);
-        let new_timelock_expiry = current_timestamp.checked_add(HUB_UPDATE_TIMELOCK).ok_or(VestingError::MathOverflow)?;
-        config.hub_update_timelock = Some(new_timelock_expiry);
-
-        emit!(DistributionHubUpdateProposed {
-            current_hub: config.distribution_hub,
-            proposed_hub: new_hub_address,
-            timelock_expiry: new_timelock_expiry,
+        // Emit event for tracking and monitoring
+        emit!(TokensReleased {
+            schedule_id,
+            recipient,
+            mint,
+            amount: actual_transfer_amount,
+            source_category,
+            timestamp: current_timestamp,
+            total_released: vesting_schedule.amount_transferred,
         });
 
         msg!(
-            "Distribution hub update proposed. New hub: {}, will be active after timestamp: {}",
-            new_hub_address,
-            new_timelock_expiry
+            "Released {} tokens from schedule {} directly to recipient {}. Total released: {}",
+            actual_transfer_amount, schedule_id, recipient,
+            vesting_schedule.amount_transferred
+        );
+
+        Ok(())
+    }
+
+    /// Close a vesting schedule and its vault after completion
+    /// This allows reclaiming the rent from the accounts
+    /// Security: Can only be called when the schedule is fully vested and the vault is empty
+    pub fn close_vesting_schedule(ctx: Context<CloseVestingSchedule>) -> Result<()> {
+        let schedule_id = ctx.accounts.vesting_schedule.schedule_id;
+        let _schedule_key = ctx.accounts.vesting_schedule.key();
+        let schedule_bump = ctx.accounts.vesting_schedule.bump;
+
+        // Create PDA signer seeds for the vesting schedule authority
+        let schedule_id_bytes = schedule_id.to_le_bytes();
+        let signer_seeds = &[
+            VESTING_SCHEDULE_SEED,
+            schedule_id_bytes.as_ref(),
+            &[schedule_bump],
+        ];
+        let signer = &[&signer_seeds[..]];
+
+        // Close the token vault account via CPI
+        let cpi_accounts = token::CloseAccount {
+            account: ctx.accounts.vesting_vault.to_account_info(),
+            destination: ctx.accounts.beneficiary.to_account_info(),
+            authority: ctx.accounts.vesting_schedule.to_account_info(),
+        };
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts,
+            signer,
+        );
+        token::close_account(cpi_ctx)?;
+
+        // The vesting_schedule account is closed automatically by Anchor via the `close` constraint
+
+        msg!(
+            "Successfully closed vesting schedule {} and its vault. Rent returned to {}.",
+            schedule_id,
+            ctx.accounts.beneficiary.key()
         );
 
         Ok(())
     }
 }
+
+// ================================================================================================
+// EVENTS
+// ================================================================================================
 
 #[event]
 pub struct ProgramInitialized {
@@ -467,6 +546,7 @@ pub struct ProgramInitialized {
 #[event]
 pub struct VestingScheduleCreated {
     pub schedule_id: u64,
+    pub recipient: Pubkey,
     pub mint: Pubkey,
     pub total_amount: u64,
     pub cliff_timestamp: i64,
@@ -476,25 +556,14 @@ pub struct VestingScheduleCreated {
     pub depositor: Pubkey,
 }
 
+/// Token release event with recipient field for complete audit trail
 #[event]
 pub struct TokensReleased {
     pub schedule_id: u64,
+    pub recipient: Pubkey,
     pub mint: Pubkey,
     pub amount: u64,
     pub source_category: SourceCategory,
     pub timestamp: i64,
     pub total_released: u64,
-}
-
-#[event]
-pub struct DistributionHubUpdateProposed {
-    pub current_hub: Pubkey,
-    pub proposed_hub: Pubkey,
-    pub timelock_expiry: i64,
-}
-
-#[event]
-pub struct DistributionHubUpdated {
-    pub old_hub: Pubkey,
-    pub new_hub: Pubkey,
 }
