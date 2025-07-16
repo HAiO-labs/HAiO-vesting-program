@@ -3,21 +3,21 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-haio_vesting = "HAio6fPGdLYXaxScRLpPraDtcQcjZYFtbtVThLFJiScs"
+haio_vesting = "Haio3oNYt8MtL9traoQNJ9RXK1XEVaQBBrZZKXt2VXjz"
 
 [programs.devnet]
-haio_vesting = "HAio6fPGdLYXaxScRLpPraDtcQcjZYFtbtVThLFJiScs"
+haio_vesting = "Haio3oNYt8MtL9traoQNJ9RXK1XEVaQBBrZZKXt2VXjz"
 
 [programs.mainnet]
-haio_vesting = "HAio6fPGdLYXaxScRLpPraDtcQcjZYFtbtVThLFJiScs"
+haio_vesting = "Haio3oNYt8MtL9traoQNJ9RXK1XEVaQBBrZZKXt2VXjz"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
 #cluster = "Localnet"
-cluster = "devnet"
-#cluster = "mainnet"
+#cluster = "devnet"
+cluster = "mainnet"
 
 wallet = "/Users/nike/.config/solana/keypairs/haio-deployer.json"
 

@@ -13,19 +13,23 @@ import * as path from 'path';
 // Load multi-sig configuration from 04_initialize_ATA_squads_multisig.ts results
 function loadVestingRecipients(tgeConfig: any) {
   if (!tgeConfig.multisigConfig || !tgeConfig.multisigConfig.vaults) {
-    throw new Error('❌ Multi-sig configuration not found. Please run 04_initialize_ATA_squads_multisig.ts first.');
+    throw new Error(
+      '❌ Multi-sig configuration not found. Please run 04_initialize_ATA_squads_multisig.ts first.'
+    );
   }
-  
+
   const vaults = tgeConfig.multisigConfig.vaults;
-  
+
   // Validate all required vaults exist
   const requiredCategories = ['PUBLIC_ROUND', 'ECOSYSTEM', 'TEAM_ADVISORS', 'STRATEGIC_PARTNERS'];
   for (const category of requiredCategories) {
     if (!vaults[category]) {
-      throw new Error(`❌ ${category} vault configuration not found. Please ensure all vaults were created.`);
+      throw new Error(
+        `❌ ${category} vault configuration not found. Please ensure all vaults were created.`
+      );
     }
   }
-  
+
   return {
     // Use the Squads vault addresses and their corresponding ATAs
     // The vault addresses are used as recipients, ATAs are used for token accounts
@@ -33,14 +37,14 @@ function loadVestingRecipients(tgeConfig: any) {
       PUBLIC_VESTING: vaults.PUBLIC_ROUND.vaultAddress,
       ECOSYSTEM_VESTING: vaults.ECOSYSTEM.vaultAddress,
       TEAM_ADVISORS: vaults.TEAM_ADVISORS.vaultAddress,
-      PARTNERS: vaults.STRATEGIC_PARTNERS.vaultAddress,
+      FOUNDATION: vaults.FOUNDATION.vaultAddress,
     },
     ataAddresses: {
       PUBLIC_VESTING: vaults.PUBLIC_ROUND.ataAddress,
       ECOSYSTEM_VESTING: vaults.ECOSYSTEM.ataAddress,
       TEAM_ADVISORS: vaults.TEAM_ADVISORS.ataAddress,
-      PARTNERS: vaults.STRATEGIC_PARTNERS.ataAddress,
-    }
+      FOUNDATION: vaults.FOUNDATION.ataAddress,
+    },
   };
 }
 
@@ -54,40 +58,40 @@ const VESTING_SCHEDULES = [
     category: 'Public Round Vesting',
     recipient: 'PUBLIC_VESTING',
     totalAmount: 64_000_000, // 64M tokens
-    cliffMonths: 0,          // No cliff
-    vestingMonths: 6,        // 6 months linear vesting
+    cliffMonths: 0, // No cliff
+    vestingMonths: 6, // 6 months linear vesting
     sourceCategory: { public: {} },
-    vault: 'PUBLIC_ROUND'
+    vault: 'PUBLIC_ROUND',
   },
   {
     id: 'ecosystem',
     category: 'Ecosystem Vesting',
     recipient: 'ECOSYSTEM_VESTING',
-    totalAmount: 388_900_000, // 388.9M tokens
-    cliffMonths: 0,           // No cliff
-    vestingMonths: 36,        // 36 months linear vesting
+    totalAmount: 390_000_000, // 390M tokens
+    cliffMonths: 0, // No cliff
+    vestingMonths: 39, // 39 months linear vesting
     sourceCategory: { ecosystem: {} },
-    vault: 'ECOSYSTEM'
+    vault: 'ECOSYSTEM',
   },
   {
     id: 'team',
     category: 'Team & Advisors',
     recipient: 'TEAM_ADVISORS',
     totalAmount: 150_000_000, // 150M tokens
-    cliffMonths: 6,           // 6 months cliff
-    vestingMonths: 36,        // 36 months linear vesting after cliff
+    cliffMonths: 6, // 6 months cliff
+    vestingMonths: 30, // 30 months linear vesting after cliff
     sourceCategory: { team: {} },
-    vault: 'TEAM_ADVISORS'
+    vault: 'TEAM_ADVISORS',
   },
   {
-    id: 'partners',
-    category: 'Strategic Partners',
-    recipient: 'PARTNERS',
-    totalAmount: 50_000_000,  // 50M tokens
-    cliffMonths: 0,           // No cliff
-    vestingMonths: 12,        // 12 months linear vesting
-    sourceCategory: { strategic: {} },
-    vault: 'STRATEGIC_PARTNERS'
+    id: 'foundation',
+    category: 'Foundation',
+    recipient: 'FOUNDATION',
+    totalAmount: 220_000_000, // 220M tokens
+    cliffMonths: 0, // No cliff
+    vestingMonths: 12, // 12 months linear vesting
+    sourceCategory: { foundation: {} },
+    vault: 'FOUNDATION',
   },
 ];
 
@@ -122,7 +126,7 @@ async function main() {
   Object.entries(VESTING_RECIPIENTS).forEach(([category, vaultAddress]) => {
     console.log(`   ${category}: ${vaultAddress}`);
   });
-  
+
   console.log('\n✅ Corresponding ATAs for token operations:');
   Object.entries(VESTING_ATAS).forEach(([category, ataAddress]) => {
     console.log(`   ${category}: ${ataAddress}`);
@@ -131,16 +135,18 @@ async function main() {
   // Display vesting mapping for clarity
   console.log('\n📋 Vesting Schedule Mapping:');
   console.log('   64M HAiO → PUBLIC_ROUND vault (6 months linear)');
-  console.log('   388.9M HAiO → ECOSYSTEM vault (36 months linear)');
-  console.log('   150M HAiO → TEAM_ADVISORS vault (6 months cliff + 36 months linear)');
-  console.log('   50M HAiO → STRATEGIC_PARTNERS vault (12 months linear)');
+  console.log('   390M HAiO → ECOSYSTEM vault (39 months linear)');
+  console.log('   150M HAiO → TEAM_ADVISORS vault (6 months cliff + 30 months linear)');
+  console.log('   220M HAiO → FOUNDATION vault (12 months linear)');
 
   // Validate recipient addresses
   console.log('\n🔍 Validating vesting recipient addresses...');
   for (const schedule of VESTING_SCHEDULES) {
     const address = VESTING_RECIPIENTS[schedule.recipient as keyof typeof VESTING_RECIPIENTS];
     if (!address) {
-      throw new Error(`❌ ${schedule.category} recipient address not found in multi-sig configuration`);
+      throw new Error(
+        `❌ ${schedule.category} recipient address not found in multi-sig configuration`
+      );
     }
     try {
       new PublicKey(address);
@@ -175,10 +181,12 @@ async function main() {
     const config = await program.account.programConfig.fetch(programConfigPDA);
     currentScheduleId = Number(config.totalSchedules);
     console.log(`✅ Program config found. Current schedule count: ${currentScheduleId}`);
-    
+
     // Verify admin authority
     if (!config.admin.equals(provider.wallet.publicKey)) {
-      throw new Error(`❌ Admin mismatch. Expected: ${provider.wallet.publicKey}, Got: ${config.admin}`);
+      throw new Error(
+        `❌ Admin mismatch. Expected: ${provider.wallet.publicKey}, Got: ${config.admin}`
+      );
     }
   } catch (error) {
     console.log('⚠️  Program not initialized. Please run initialization first.');
@@ -206,17 +214,21 @@ async function main() {
     console.log(`\n📋 Creating ${scheduleConfig.category} vesting schedule...`);
     console.log(`   Target Vault: ${scheduleConfig.vault}`);
 
-    const recipientAddress = VESTING_RECIPIENTS[scheduleConfig.recipient as keyof typeof VESTING_RECIPIENTS];
+    const recipientAddress =
+      VESTING_RECIPIENTS[scheduleConfig.recipient as keyof typeof VESTING_RECIPIENTS];
     const recipientPubkey = new PublicKey(recipientAddress);
 
     // Calculate timestamps
     const cliffTimestamp = currentTimestamp + monthsToSeconds(scheduleConfig.cliffMonths);
     const vestingStartTimestamp = cliffTimestamp; // Start vesting after cliff
-    const vestingEndTimestamp = vestingStartTimestamp + monthsToSeconds(scheduleConfig.vestingMonths);
+    const vestingEndTimestamp =
+      vestingStartTimestamp + monthsToSeconds(scheduleConfig.vestingMonths);
 
     console.log(`   Amount: ${scheduleConfig.totalAmount.toLocaleString()} HAiO`);
     console.log(`   Recipient: ${recipientAddress}`);
-    console.log(`   Cliff: ${scheduleConfig.cliffMonths} months (${new Date(cliffTimestamp * 1000).toLocaleDateString()})`);
+    console.log(
+      `   Cliff: ${scheduleConfig.cliffMonths} months (${new Date(cliffTimestamp * 1000).toLocaleDateString()})`
+    );
     console.log(`   Vesting Duration: ${scheduleConfig.vestingMonths} months`);
     console.log(`   Vesting End: ${new Date(vestingEndTimestamp * 1000).toLocaleDateString()}`);
 
@@ -226,10 +238,10 @@ async function main() {
       if (!ataAddress) {
         throw new Error(`ATA address not found for ${scheduleConfig.recipient}`);
       }
-      
+
       const recipientTokenAccountAddress = new PublicKey(ataAddress);
       console.log(`   📋 Using existing ATA: ${recipientTokenAccountAddress.toString()}`);
-      
+
       // Verify ATA exists
       try {
         const ataInfo = await provider.connection.getAccountInfo(recipientTokenAccountAddress);
@@ -238,17 +250,25 @@ async function main() {
         }
         console.log(`   ✅ ATA verified and ready`);
       } catch (error) {
-        throw new Error(`Failed to verify ATA: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(
+          `Failed to verify ATA: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
 
       // Derive PDAs
       const [vestingSchedulePDA] = PublicKey.findProgramAddressSync(
-        [Buffer.from('vesting_schedule'), new anchor.BN(currentScheduleId).toArrayLike(Buffer, 'le', 8)],
+        [
+          Buffer.from('vesting_schedule'),
+          new anchor.BN(currentScheduleId).toArrayLike(Buffer, 'le', 8),
+        ],
         program.programId
       );
 
       const [vestingVaultPDA] = PublicKey.findProgramAddressSync(
-        [Buffer.from('vesting_vault'), new anchor.BN(currentScheduleId).toArrayLike(Buffer, 'le', 8)],
+        [
+          Buffer.from('vesting_vault'),
+          new anchor.BN(currentScheduleId).toArrayLike(Buffer, 'le', 8),
+        ],
         program.programId
       );
 
@@ -256,7 +276,9 @@ async function main() {
       const params = {
         recipient: recipientPubkey,
         recipientTokenAccount: recipientTokenAccountAddress,
-        totalAmount: new anchor.BN((BigInt(scheduleConfig.totalAmount) * (10n ** BigInt(decimals))).toString()),
+        totalAmount: new anchor.BN(
+          (BigInt(scheduleConfig.totalAmount) * 10n ** BigInt(decimals)).toString()
+        ),
         cliffTimestamp: new anchor.BN(cliffTimestamp),
         vestingStartTimestamp: new anchor.BN(vestingStartTimestamp),
         vestingEndTimestamp: new anchor.BN(vestingEndTimestamp),
@@ -302,7 +324,6 @@ async function main() {
       });
 
       currentScheduleId++;
-
     } catch (error) {
       console.error(`   ❌ Failed to create ${scheduleConfig.category} schedule:`, error);
       createdSchedules.push({
@@ -317,7 +338,7 @@ async function main() {
     }
 
     // Wait between transactions
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
   }
 
   // Save vesting schedule report
@@ -329,7 +350,7 @@ async function main() {
     admin: provider.wallet.publicKey.toString(),
     vestingType: 'category_specific_multisig',
     vaultMapping: Object.entries(VESTING_RECIPIENTS).reduce((acc, [key, value]) => {
-      const schedule = VESTING_SCHEDULES.find(s => s.recipient === key);
+      const schedule = VESTING_SCHEDULES.find((s) => s.recipient === key);
       const ataAddress = VESTING_ATAS[key as keyof typeof VESTING_ATAS];
       if (schedule) {
         acc[schedule.vault] = {
@@ -338,12 +359,12 @@ async function main() {
           vaultAddress: value,
           ataAddress: ataAddress,
           cliffMonths: schedule.cliffMonths,
-          vestingMonths: schedule.vestingMonths
+          vestingMonths: schedule.vestingMonths,
         };
       }
       return acc;
     }, {} as any),
-    totalSchedulesCreated: createdSchedules.filter(s => s.success).length,
+    totalSchedulesCreated: createdSchedules.filter((s) => s.success).length,
     schedules: createdSchedules,
   };
 
@@ -352,10 +373,10 @@ async function main() {
   console.log(`\n📋 Vesting schedules report saved to: ${reportPath}`);
 
   // Summary
-  const successful = createdSchedules.filter(s => s.success).length;
-  const failed = createdSchedules.filter(s => !s.success).length;
+  const successful = createdSchedules.filter((s) => s.success).length;
+  const failed = createdSchedules.filter((s) => !s.success).length;
   const totalVestedAmount = createdSchedules
-    .filter(s => s.success)
+    .filter((s) => s.success)
     .reduce((sum, s) => sum + s.amount, 0);
 
   console.log('\n🎉 HAiO TGE Vesting Schedule Creation Complete!');
@@ -369,9 +390,13 @@ async function main() {
   }
 
   console.log('\n📋 Vesting Summary:');
-  createdSchedules.filter(s => s.success).forEach(s => {
-    console.log(`   ✅ ${s.amount.toLocaleString()} HAiO → ${s.vault} vault (${s.cliffMonths}m cliff + ${s.vestingMonths}m vesting)`);
-  });
+  createdSchedules
+    .filter((s) => s.success)
+    .forEach((s) => {
+      console.log(
+        `   ✅ ${s.amount.toLocaleString()} HAiO → ${s.vault} vault (${s.cliffMonths}m cliff + ${s.vestingMonths}m vesting)`
+      );
+    });
 
   console.log('\n🔗 Resources:');
   console.log('   Squads Dashboard: https://app.squads.so');
@@ -382,4 +407,4 @@ async function main() {
 main().catch((err) => {
   console.error('❌ Error:', err);
   process.exit(1);
-}); 
+});

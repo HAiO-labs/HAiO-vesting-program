@@ -10,7 +10,7 @@ use state::{ProgramConfig, VestingSchedule, SourceCategory};
 use errors::VestingError;
 use constants::*;
 
-declare_id!("HAio6fPGdLYXaxScRLpPraDtcQcjZYFtbtVThLFJiScs");
+declare_id!("Haio3oNYt8MtL9traoQNJ9RXK1XEVaQBBrZZKXt2VXjz");
 
 /// Security.txt information for on-chain security contact details
 #[cfg(not(feature = "no-entrypoint"))]
