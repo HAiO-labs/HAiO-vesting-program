@@ -32,7 +32,6 @@ target/types/
 # Rust
 target/
 **/*.rs.bk
-Cargo.lock
 
 # Keys
 **/keypair.json
