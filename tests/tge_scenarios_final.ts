@@ -22,7 +22,7 @@ import * as fs from 'fs';
 
 /**
  * 🔥 최신 TGE (Token Generation Event) Scenarios Test Suite
- * 
+ *
  * 업데이트된 할당 구조:
  * - Public Round: 8% (80M) - 16M 즉시, 64M 베스팅(6개월)
  * - Ecosystem: 40% (400M) - 11.1M 즉시, 388.9M 베스팅(36개월)
@@ -52,37 +52,39 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
 
     // Public Round: 80M total (8%)
     PUBLIC_ROUND: {
-      IMMEDIATE: new BN('16000000000000000'), // 16M tokens  
-      VESTING: new BN('64000000000000000'),   // 64M tokens
+      IMMEDIATE: new BN('16000000000000000'), // 16M tokens
+      VESTING: new BN('64000000000000000'), // 64M tokens
       VESTING_MONTHS: 6,
     },
 
     // Ecosystem: 400M total (40%)
     ECOSYSTEM: {
-      IMMEDIATE: new BN('11100000000000000'),  // 11.1M tokens
-      VESTING: new BN('388900000000000000'),   // 388.9M tokens  
-      VESTING_MONTHS: 36,
+      IMMEDIATE: new BN('10000000000000000'), // 10M tokens (11.1M → 10M)
+      VESTING: new BN('390000000000000000'), // 390M tokens (388.9M → 390M)
+      VESTING_MONTHS: 39, // 36 → 39
     },
 
     // Team & Advisors: 150M total (15%)
     TEAM_ADVISORS: {
       VESTING: new BN('150000000000000000'), // 150M tokens
       CLIFF_MONTHS: 6,
-      VESTING_MONTHS: 36, // After cliff
-      TOTAL_MONTHS: 42,   // 6 cliff + 36 vesting
+      VESTING_MONTHS: 30, // 36 → 30
+      TOTAL_MONTHS: 36, // 6 cliff + 30 vesting
     },
 
-    // Partners: 50M total (5%)
-    PARTNERS: {
-      VESTING: new BN('50000000000000000'), // 50M tokens
+    // Foundation: 220M (22%) - 신규 베스팅
+    FOUNDATION: {
+      VESTING: new BN('220000000000000000'), // 220M tokens
       VESTING_MONTHS: 12,
+    },
+
+    // Partners: 50M (5%) - 즉시 분배로 이동
+    PARTNERS: {
+      IMMEDIATE: new BN('50000000000000000'), // 50M tokens
     },
 
     // Liquidity Provision: 100M (10%)
     LIQUIDITY_PROVISION: new BN('100000000000000000'),
-
-    // Foundation & Treasury Reserve: 220M (22%)
-    FOUNDATION_TREASURY: new BN('220000000000000000'),
   };
 
   // Wallet setup
@@ -120,6 +122,7 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
     team?: PublicKey;
     partners?: PublicKey;
     ecosystem?: PublicKey;
+    foundation?: PublicKey; // Added foundation vault
   } = {};
 
   // Schedule tracking
@@ -128,6 +131,7 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
     team?: number;
     partners?: number;
     ecosystem?: number;
+    foundation?: number; // Added foundation schedule
   } = {};
 
   // Helper functions
@@ -136,7 +140,7 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
   }
 
   async function waitForTime(milliseconds: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, milliseconds));
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
   }
 
   async function getTokenBalance(account: SplAccount): Promise<BN> {
@@ -147,7 +151,10 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
   /**
    * 🔄 크랭크 베스팅 스케줄 유틸리티 함수
    */
-  async function crankVestingSchedule(scheduleId: number, recipientAccount: SplAccount): Promise<BN> {
+  async function crankVestingSchedule(
+    scheduleId: number,
+    recipientAccount: SplAccount
+  ): Promise<BN> {
     const balanceBefore = await getTokenBalance(recipientAccount);
 
     await program.methods
@@ -185,7 +192,7 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
         console.log('⚠️ Fixed admin key not found, generating new one...');
         adminWallet = Keypair.generate();
       }
-      
+
       recipientWallets = {
         publicImmediate: Keypair.generate(),
         publicVesting: Keypair.generate(),
@@ -198,8 +205,11 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
       };
 
       // Airdrop SOL to admin
-      const airdropSig = await connection.requestAirdrop(adminWallet.publicKey, 5 * LAMPORTS_PER_SOL);
-      await connection.confirmTransaction(airdropSig, "confirmed");
+      const airdropSig = await connection.requestAirdrop(
+        adminWallet.publicKey,
+        5 * LAMPORTS_PER_SOL
+      );
+      await connection.confirmTransaction(airdropSig, 'confirmed');
 
       // Create mint
       mint = await createMint(
@@ -236,14 +246,54 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
       // Create recipient token accounts
       const accounts = await Promise.all([
         getOrCreateAssociatedTokenAccount(connection, adminWallet, mint, adminWallet.publicKey),
-        getOrCreateAssociatedTokenAccount(connection, adminWallet, mint, recipientWallets.publicImmediate.publicKey),
-        getOrCreateAssociatedTokenAccount(connection, adminWallet, mint, recipientWallets.publicVesting.publicKey),
-        getOrCreateAssociatedTokenAccount(connection, adminWallet, mint, recipientWallets.teamAdvisor.publicKey),
-        getOrCreateAssociatedTokenAccount(connection, adminWallet, mint, recipientWallets.partners.publicKey),
-        getOrCreateAssociatedTokenAccount(connection, adminWallet, mint, recipientWallets.ecosystemImmediate.publicKey),
-        getOrCreateAssociatedTokenAccount(connection, adminWallet, mint, recipientWallets.ecosystemVesting.publicKey),
-        getOrCreateAssociatedTokenAccount(connection, adminWallet, mint, recipientWallets.liquidity.publicKey),
-        getOrCreateAssociatedTokenAccount(connection, adminWallet, mint, recipientWallets.foundation.publicKey),
+        getOrCreateAssociatedTokenAccount(
+          connection,
+          adminWallet,
+          mint,
+          recipientWallets.publicImmediate.publicKey
+        ),
+        getOrCreateAssociatedTokenAccount(
+          connection,
+          adminWallet,
+          mint,
+          recipientWallets.publicVesting.publicKey
+        ),
+        getOrCreateAssociatedTokenAccount(
+          connection,
+          adminWallet,
+          mint,
+          recipientWallets.teamAdvisor.publicKey
+        ),
+        getOrCreateAssociatedTokenAccount(
+          connection,
+          adminWallet,
+          mint,
+          recipientWallets.partners.publicKey
+        ),
+        getOrCreateAssociatedTokenAccount(
+          connection,
+          adminWallet,
+          mint,
+          recipientWallets.ecosystemImmediate.publicKey
+        ),
+        getOrCreateAssociatedTokenAccount(
+          connection,
+          adminWallet,
+          mint,
+          recipientWallets.ecosystemVesting.publicKey
+        ),
+        getOrCreateAssociatedTokenAccount(
+          connection,
+          adminWallet,
+          mint,
+          recipientWallets.liquidity.publicKey
+        ),
+        getOrCreateAssociatedTokenAccount(
+          connection,
+          adminWallet,
+          mint,
+          recipientWallets.foundation.publicKey
+        ),
       ]);
 
       allTokenAccounts = {
@@ -282,7 +332,7 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
           })
           .signers([adminWallet])
           .rpc();
-        
+
         console.log('✅ Program initialized with new configuration');
       } catch (error: any) {
         if (error.toString().includes('already in use')) {
@@ -295,7 +345,7 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
       const config = await program.account.programConfig.fetch(programConfigPDA);
       console.log(`✅ Program Config PDA: ${programConfigPDA.toString()}`);
       console.log(`✅ Admin: ${config.admin.toString()}`);
-      
+
       // Verify admin matches our test admin
       if (!config.admin.equals(adminWallet.publicKey)) {
         console.log('⚠️ Admin mismatch, but continuing with the existing admin');
@@ -321,7 +371,7 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
         BigInt(ALLOCATION.PUBLIC_ROUND.IMMEDIATE.toString())
       );
 
-      // Distribution 2: Ecosystem Immediate (11.1M) 
+      // Distribution 2: Ecosystem Immediate (11.1M)
       await transfer(
         connection,
         adminWallet,
@@ -348,7 +398,7 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
         allTokenAccounts.admin.address,
         allTokenAccounts.foundation.address,
         adminWallet.publicKey,
-        BigInt(ALLOCATION.FOUNDATION_TREASURY.toString())
+        BigInt(ALLOCATION.FOUNDATION.VESTING.toString()) // Changed to foundation vesting
       );
 
       console.log('✅ All immediate distributions completed');
@@ -362,20 +412,31 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
       ]);
 
       console.log('\n📊 Immediate Distribution Verification:');
-      console.log(`  Public Immediate: ${balances[0].div(new BN('1000000000')).toString()}M tokens`);
-      console.log(`  Ecosystem Immediate: ${balances[1].div(new BN('1000000000')).toString()}M tokens`);
-      console.log(`  Liquidity Provision: ${balances[2].div(new BN('1000000000')).toString()}M tokens`);
-      console.log(`  Foundation & Treasury: ${balances[3].div(new BN('1000000000')).toString()}M tokens`);
+      console.log(
+        `  Public Immediate: ${balances[0].div(new BN('1000000000')).toString()}M tokens`
+      );
+      console.log(
+        `  Ecosystem Immediate: ${balances[1].div(new BN('1000000000')).toString()}M tokens`
+      );
+      console.log(
+        `  Liquidity Provision: ${balances[2].div(new BN('1000000000')).toString()}M tokens`
+      );
+      console.log(
+        `  Foundation & Treasury: ${balances[3].div(new BN('1000000000')).toString()}M tokens`
+      );
 
       // Total immediate should be 347.1M tokens
       const totalImmediate = balances[0].add(balances[1]).add(balances[2]).add(balances[3]);
-      const expectedImmediate = ALLOCATION.PUBLIC_ROUND.IMMEDIATE
-        .add(ALLOCATION.ECOSYSTEM.IMMEDIATE)
+      const expectedImmediate = ALLOCATION.PUBLIC_ROUND.IMMEDIATE.add(
+        ALLOCATION.ECOSYSTEM.IMMEDIATE
+      )
         .add(ALLOCATION.LIQUIDITY_PROVISION)
-        .add(ALLOCATION.FOUNDATION_TREASURY);
+        .add(ALLOCATION.FOUNDATION.VESTING); // Changed to foundation vesting
 
       expect(totalImmediate.toString()).to.equal(expectedImmediate.toString());
-      console.log(`✅ Total immediate allocation: ${totalImmediate.div(new BN('1000000000')).toString()}M tokens (verified)`);
+      console.log(
+        `✅ Total immediate allocation: ${totalImmediate.div(new BN('1000000000')).toString()}M tokens (verified)`
+      );
     });
 
     it('✅ Should create vesting schedules for remaining allocations', async () => {
@@ -387,7 +448,7 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
 
       console.log(`Current program admin: ${currentAdmin.toString()}`);
       console.log(`Test admin: ${adminWallet.publicKey.toString()}`);
-      
+
       // Use the actual admin from the program config for signing
       let actualAdminKeypair: Keypair;
       if (!currentAdmin.equals(adminWallet.publicKey)) {
@@ -407,7 +468,7 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
       {
         const scheduleId = scheduleCounter;
         createdScheduleIds.public = scheduleId.toNumber();
-        
+
         const [vestingSchedulePDA] = PublicKey.findProgramAddressSync(
           [Buffer.from('vesting_schedule'), scheduleId.toArrayLike(Buffer, 'le', 8)],
           program.programId
@@ -426,7 +487,9 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
             totalAmount: ALLOCATION.PUBLIC_ROUND.VESTING,
             cliffTimestamp: new BN(startTimestamp), // No cliff
             vestingStartTimestamp: new BN(startTimestamp),
-            vestingEndTimestamp: new BN(startTimestamp + monthsToSeconds(ALLOCATION.PUBLIC_ROUND.VESTING_MONTHS)),
+            vestingEndTimestamp: new BN(
+              startTimestamp + monthsToSeconds(ALLOCATION.PUBLIC_ROUND.VESTING_MONTHS)
+            ),
             sourceCategory: { public: {} },
           })
           .accounts({
@@ -447,11 +510,11 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
         console.log(`✅ Public Round vesting schedule created (ID: ${scheduleId})`);
       }
 
-      // 2. Ecosystem Vesting Schedule (36 months, no cliff)
+      // 2. Ecosystem Vesting Schedule (39 months, no cliff)
       {
         const scheduleId = scheduleCounter;
         createdScheduleIds.ecosystem = scheduleId;
-        
+
         const [vestingSchedulePDA] = PublicKey.findProgramAddressSync(
           [Buffer.from('vesting_schedule'), scheduleId.toArrayLike(Buffer, 'le', 8)],
           program.programId
@@ -470,7 +533,9 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
             totalAmount: ALLOCATION.ECOSYSTEM.VESTING,
             cliffTimestamp: new BN(startTimestamp), // No cliff
             vestingStartTimestamp: new BN(startTimestamp),
-            vestingEndTimestamp: new BN(startTimestamp + monthsToSeconds(ALLOCATION.ECOSYSTEM.VESTING_MONTHS)),
+            vestingEndTimestamp: new BN(
+              startTimestamp + monthsToSeconds(ALLOCATION.ECOSYSTEM.VESTING_MONTHS)
+            ),
             sourceCategory: { ecosystem: {} },
           })
           .accounts({
@@ -491,11 +556,11 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
         console.log(`✅ Ecosystem vesting schedule created (ID: ${scheduleId})`);
       }
 
-      // 3. Team & Advisors Vesting Schedule (6 months cliff + 36 months vesting)
+      // 3. Team & Advisors Vesting Schedule (6개월 cliff + 30개월 vesting)
       {
         const scheduleId = scheduleCounter;
         createdScheduleIds.team = scheduleId;
-        
+
         const [vestingSchedulePDA] = PublicKey.findProgramAddressSync(
           [Buffer.from('vesting_schedule'), scheduleId.toArrayLike(Buffer, 'le', 8)],
           program.programId
@@ -512,9 +577,18 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
             recipient: recipientWallets.teamAdvisor.publicKey,
             recipientTokenAccount: allTokenAccounts.teamAdvisor.address,
             totalAmount: ALLOCATION.TEAM_ADVISORS.VESTING,
-            cliffTimestamp: new BN(startTimestamp + monthsToSeconds(ALLOCATION.TEAM_ADVISORS.CLIFF_MONTHS)),
-            vestingStartTimestamp: new BN(startTimestamp + monthsToSeconds(ALLOCATION.TEAM_ADVISORS.CLIFF_MONTHS)),
-            vestingEndTimestamp: new BN(startTimestamp + monthsToSeconds(ALLOCATION.TEAM_ADVISORS.TOTAL_MONTHS)),
+            cliffTimestamp: new BN(
+              startTimestamp + monthsToSeconds(ALLOCATION.TEAM_ADVISORS.CLIFF_MONTHS)
+            ),
+            vestingStartTimestamp: new BN(
+              startTimestamp + monthsToSeconds(ALLOCATION.TEAM_ADVISORS.CLIFF_MONTHS)
+            ),
+            vestingEndTimestamp: new BN(
+              startTimestamp +
+                monthsToSeconds(
+                  ALLOCATION.TEAM_ADVISORS.CLIFF_MONTHS + ALLOCATION.TEAM_ADVISORS.VESTING_MONTHS
+                )
+            ),
             sourceCategory: { team: {} },
           })
           .accounts({
@@ -535,11 +609,11 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
         console.log(`✅ Team & Advisors vesting schedule created (ID: ${scheduleId})`);
       }
 
-      // 4. Partners Vesting Schedule (12 months, no cliff)
+      // 4. Foundation Vesting Schedule (12개월, no cliff)
       {
         const scheduleId = scheduleCounter;
-        createdScheduleIds.partners = scheduleId;
-        
+        createdScheduleIds.foundation = scheduleId;
+
         const [vestingSchedulePDA] = PublicKey.findProgramAddressSync(
           [Buffer.from('vesting_schedule'), scheduleId.toArrayLike(Buffer, 'le', 8)],
           program.programId
@@ -549,17 +623,19 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
           program.programId
         );
 
-        vestingVaultPDAs.partners = vestingVaultPDA;
+        vestingVaultPDAs.foundation = vestingVaultPDA;
 
         await program.methods
           .createVestingSchedule(scheduleId, {
-            recipient: recipientWallets.partners.publicKey,
-            recipientTokenAccount: allTokenAccounts.partners.address,
-            totalAmount: ALLOCATION.PARTNERS.VESTING,
+            recipient: recipientWallets.foundation.publicKey,
+            recipientTokenAccount: allTokenAccounts.foundation.address,
+            totalAmount: ALLOCATION.FOUNDATION.VESTING,
             cliffTimestamp: new BN(startTimestamp), // No cliff
             vestingStartTimestamp: new BN(startTimestamp),
-            vestingEndTimestamp: new BN(startTimestamp + monthsToSeconds(ALLOCATION.PARTNERS.VESTING_MONTHS)),
-            sourceCategory: { public: {} }, // Using public category for partners
+            vestingEndTimestamp: new BN(
+              startTimestamp + monthsToSeconds(ALLOCATION.FOUNDATION.VESTING_MONTHS)
+            ),
+            sourceCategory: { foundation: {} },
           })
           .accounts({
             admin: actualAdminKeypair.publicKey,
@@ -576,7 +652,7 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
           .rpc();
 
         scheduleCounter++;
-        console.log(`✅ Partners vesting schedule created (ID: ${scheduleId})`);
+        console.log(`✅ Foundation vesting schedule created (ID: ${scheduleId})`);
       }
 
       console.log('\n✅ All vesting schedules created successfully');
@@ -589,26 +665,45 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
       console.log('\n⏰ Testing immediate vesting (no cliff scenarios)...');
 
       // Skip if schedules weren't created due to admin mismatch
-      if (!createdScheduleIds.public || !createdScheduleIds.ecosystem || !createdScheduleIds.partners) {
+      if (
+        !createdScheduleIds.public ||
+        !createdScheduleIds.ecosystem ||
+        !createdScheduleIds.foundation
+      ) {
         console.log('⚠️ Skipping vesting tests - schedules not created due to admin mismatch');
         console.log('⚠️ Run with anchor clean first for independent TGE testing');
         return;
       }
 
       // Test Public Round immediate vesting
-      const publicTransferred = await crankVestingSchedule(createdScheduleIds.public, allTokenAccounts.publicVesting);
+      const publicTransferred = await crankVestingSchedule(
+        createdScheduleIds.public,
+        allTokenAccounts.publicVesting
+      );
       expect(publicTransferred.gt(new BN(0))).to.be.true;
-      console.log(`✅ Public Round: ${publicTransferred.div(new BN('1000000000')).toString()}M tokens transferred immediately`);
+      console.log(
+        `✅ Public Round: ${publicTransferred.div(new BN('1000000000')).toString()}M tokens transferred immediately`
+      );
 
       // Test Ecosystem immediate vesting
-      const ecosystemTransferred = await crankVestingSchedule(createdScheduleIds.ecosystem, allTokenAccounts.ecosystemVesting);
+      const ecosystemTransferred = await crankVestingSchedule(
+        createdScheduleIds.ecosystem,
+        allTokenAccounts.ecosystemVesting
+      );
       expect(ecosystemTransferred.gt(new BN(0))).to.be.true;
-      console.log(`✅ Ecosystem: ${ecosystemTransferred.div(new BN('1000000000')).toString()}M tokens transferred immediately`);
+      console.log(
+        `✅ Ecosystem: ${ecosystemTransferred.div(new BN('1000000000')).toString()}M tokens transferred immediately`
+      );
 
-      // Test Partners immediate vesting
-      const partnersTransferred = await crankVestingSchedule(createdScheduleIds.partners, allTokenAccounts.partners);
-      expect(partnersTransferred.gt(new BN(0))).to.be.true;
-      console.log(`✅ Partners: ${partnersTransferred.div(new BN('1000000000')).toString()}M tokens transferred immediately`);
+      // Test Foundation immediate vesting
+      const foundationTransferred = await crankVestingSchedule(
+        createdScheduleIds.foundation,
+        allTokenAccounts.foundation
+      );
+      expect(foundationTransferred.gt(new BN(0))).to.be.true;
+      console.log(
+        `✅ Foundation: ${foundationTransferred.div(new BN('1000000000')).toString()}M tokens transferred immediately`
+      );
     });
 
     it('✅ Should enforce cliff period for Team & Advisors', async () => {
@@ -616,12 +711,17 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
 
       // Skip if schedules weren't created due to admin mismatch
       if (!createdScheduleIds.team) {
-        console.log('⚠️ Skipping cliff period test - team schedule not created due to admin mismatch');
+        console.log(
+          '⚠️ Skipping cliff period test - team schedule not created due to admin mismatch'
+        );
         return;
       }
 
       // Try to crank before cliff period ends (should get 0 tokens)
-      const teamTransferred = await crankVestingSchedule(createdScheduleIds.team, allTokenAccounts.teamAdvisor);
+      const teamTransferred = await crankVestingSchedule(
+        createdScheduleIds.team,
+        allTokenAccounts.teamAdvisor
+      );
       expect(teamTransferred.eq(new BN(0))).to.be.true;
       console.log('✅ Team & Advisors: No tokens transferred during cliff period (as expected)');
     });
@@ -631,7 +731,9 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
 
       // Skip if schedules weren't created due to admin mismatch
       if (!createdScheduleIds.team) {
-        console.log('⚠️ Skipping cliff release test - team schedule not created due to admin mismatch');
+        console.log(
+          '⚠️ Skipping cliff release test - team schedule not created due to admin mismatch'
+        );
         return;
       }
 
@@ -639,28 +741,45 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
       console.log('⏰ Waiting for cliff period to end...');
       await waitForTime(monthsToSeconds(ALLOCATION.TEAM_ADVISORS.CLIFF_MONTHS));
 
-      const teamTransferred = await crankVestingSchedule(createdScheduleIds.team, allTokenAccounts.teamAdvisor);
+      const teamTransferred = await crankVestingSchedule(
+        createdScheduleIds.team,
+        allTokenAccounts.teamAdvisor
+      );
       expect(teamTransferred.gt(new BN(0))).to.be.true;
-      console.log(`✅ Team & Advisors: ${teamTransferred.div(new BN('1000000000')).toString()}M tokens transferred after cliff`);
+      console.log(
+        `✅ Team & Advisors: ${teamTransferred.div(new BN('1000000000')).toString()}M tokens transferred after cliff`
+      );
 
       // 베스팅 계산 검증
-      const expectedMonthlyRelease = ALLOCATION.TEAM_ADVISORS.VESTING.div(new BN(ALLOCATION.TEAM_ADVISORS.VESTING_MONTHS));
+      const expectedMonthlyRelease = ALLOCATION.TEAM_ADVISORS.VESTING.div(
+        new BN(ALLOCATION.TEAM_ADVISORS.VESTING_MONTHS)
+      );
       const tolerancePercent = 10; // 10% tolerance for time-based calculations
       const tolerance = expectedMonthlyRelease.mul(new BN(tolerancePercent)).div(new BN(100));
 
-      const isWithinTolerance = teamTransferred.gte(expectedMonthlyRelease.sub(tolerance)) &&
-                               teamTransferred.lte(expectedMonthlyRelease.add(tolerance));
-      
+      const isWithinTolerance =
+        teamTransferred.gte(expectedMonthlyRelease.sub(tolerance)) &&
+        teamTransferred.lte(expectedMonthlyRelease.add(tolerance));
+
       expect(isWithinTolerance).to.be.true;
-      console.log(`✅ Team vesting amount within expected range (${expectedMonthlyRelease.div(new BN('1000000000')).toString()}M ± ${tolerancePercent}%)`);
+      console.log(
+        `✅ Team vesting amount within expected range (${expectedMonthlyRelease.div(new BN('1000000000')).toString()}M ± ${tolerancePercent}%)`
+      );
     });
 
     it('✅ Should continue progressive vesting for all active schedules', async () => {
       console.log('\n📈 Testing progressive vesting over time...');
 
       // Skip if schedules weren't created due to admin mismatch
-      if (!createdScheduleIds.public || !createdScheduleIds.ecosystem || !createdScheduleIds.partners || !createdScheduleIds.team) {
-        console.log('⚠️ Skipping progressive vesting test - schedules not created due to admin mismatch');
+      if (
+        !createdScheduleIds.public ||
+        !createdScheduleIds.ecosystem ||
+        !createdScheduleIds.foundation ||
+        !createdScheduleIds.team
+      ) {
+        console.log(
+          '⚠️ Skipping progressive vesting test - schedules not created due to admin mismatch'
+        );
         return;
       }
 
@@ -672,30 +791,37 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
         console.log(`\n⏰ Month ${month}: Cranking all vesting schedules...`);
         await waitForTime(intervalTime);
 
-        const [publicTransferred, ecosystemTransferred, partnersTransferred, teamTransferred] = await Promise.all([
-          crankVestingSchedule(createdScheduleIds.public, allTokenAccounts.publicVesting),
-          crankVestingSchedule(createdScheduleIds.ecosystem, allTokenAccounts.ecosystemVesting),
-          crankVestingSchedule(createdScheduleIds.partners, allTokenAccounts.partners),
-          crankVestingSchedule(createdScheduleIds.team, allTokenAccounts.teamAdvisor),
-        ]);
+        const [publicTransferred, ecosystemTransferred, foundationTransferred, teamTransferred] =
+          await Promise.all([
+            crankVestingSchedule(createdScheduleIds.public, allTokenAccounts.publicVesting),
+            crankVestingSchedule(createdScheduleIds.ecosystem, allTokenAccounts.ecosystemVesting),
+            crankVestingSchedule(createdScheduleIds.foundation, allTokenAccounts.foundation), // Changed to foundation
+            crankVestingSchedule(createdScheduleIds.team, allTokenAccounts.teamAdvisor),
+          ]);
 
         console.log(`  Public: +${publicTransferred.div(new BN('1000000000')).toString()}M`);
         console.log(`  Ecosystem: +${ecosystemTransferred.div(new BN('1000000000')).toString()}M`);
-        console.log(`  Partners: +${partnersTransferred.div(new BN('1000000000')).toString()}M`);
+        console.log(
+          `  Foundation: +${foundationTransferred.div(new BN('1000000000')).toString()}M`
+        );
         console.log(`  Team: +${teamTransferred.div(new BN('1000000000')).toString()}M`);
 
         // Public Round should be fully vested by month 6
         if (month >= ALLOCATION.PUBLIC_ROUND.VESTING_MONTHS) {
           const publicBalance = await getTokenBalance(allTokenAccounts.publicVesting);
           expect(publicBalance.toString()).to.equal(ALLOCATION.PUBLIC_ROUND.VESTING.toString());
-          console.log(`  ✅ Public Round fully vested: ${publicBalance.div(new BN('1000000000')).toString()}M`);
+          console.log(
+            `  ✅ Public Round fully vested: ${publicBalance.div(new BN('1000000000')).toString()}M`
+          );
         }
 
-        // Partners should be fully vested by month 12
-        if (month >= ALLOCATION.PARTNERS.VESTING_MONTHS) {
-          const partnersBalance = await getTokenBalance(allTokenAccounts.partners);
-          expect(partnersBalance.toString()).to.equal(ALLOCATION.PARTNERS.VESTING.toString());
-          console.log(`  ✅ Partners fully vested: ${partnersBalance.div(new BN('1000000000')).toString()}M`);
+        // Foundation should be fully vested by month 12
+        if (month >= ALLOCATION.FOUNDATION.VESTING_MONTHS) {
+          const foundationBalance = await getTokenBalance(allTokenAccounts.foundation);
+          expect(foundationBalance.toString()).to.equal(ALLOCATION.FOUNDATION.VESTING.toString());
+          console.log(
+            `  ✅ Foundation fully vested: ${foundationBalance.div(new BN('1000000000')).toString()}M`
+          );
         }
       }
 
@@ -709,28 +835,49 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
 
       // Get all current balances
       const recipientBalances = await Promise.all([
-        getTokenBalance(allTokenAccounts.publicImmediate),    // 0: Public Immediate
-        getTokenBalance(allTokenAccounts.publicVesting),     // 1: Public Vesting  
-        getTokenBalance(allTokenAccounts.teamAdvisor),       // 2: Team & Advisors
-        getTokenBalance(allTokenAccounts.partners),          // 3: Partners
+        getTokenBalance(allTokenAccounts.publicImmediate), // 0: Public Immediate
+        getTokenBalance(allTokenAccounts.publicVesting), // 1: Public Vesting
+        getTokenBalance(allTokenAccounts.teamAdvisor), // 2: Team & Advisors
+        getTokenBalance(allTokenAccounts.partners), // 3: Partners
         getTokenBalance(allTokenAccounts.ecosystemImmediate), // 4: Ecosystem Immediate
-        getTokenBalance(allTokenAccounts.ecosystemVesting),  // 5: Ecosystem Vesting
-        getTokenBalance(allTokenAccounts.liquidity),         // 6: Liquidity
-        getTokenBalance(allTokenAccounts.foundation),        // 7: Foundation & Treasury
-        getTokenBalance(allTokenAccounts.admin),             // 8: Admin (remaining)
+        getTokenBalance(allTokenAccounts.ecosystemVesting), // 5: Ecosystem Vesting
+        getTokenBalance(allTokenAccounts.liquidity), // 6: Liquidity
+        getTokenBalance(allTokenAccounts.foundation), // 7: Foundation & Treasury
+        getTokenBalance(allTokenAccounts.admin), // 8: Admin (remaining)
       ]);
 
       // Calculate vault balances (only if vaults were created)
       const vaultBalances = await Promise.all([
-        vestingVaultPDAs.public ? getAccount(connection, vestingVaultPDAs.public).then(acc => new BN(acc.amount.toString())).catch(() => new BN(0)) : new BN(0),
-        vestingVaultPDAs.team ? getAccount(connection, vestingVaultPDAs.team).then(acc => new BN(acc.amount.toString())).catch(() => new BN(0)) : new BN(0),
-        vestingVaultPDAs.partners ? getAccount(connection, vestingVaultPDAs.partners).then(acc => new BN(acc.amount.toString())).catch(() => new BN(0)) : new BN(0),
-        vestingVaultPDAs.ecosystem ? getAccount(connection, vestingVaultPDAs.ecosystem).then(acc => new BN(acc.amount.toString())).catch(() => new BN(0)) : new BN(0),
+        vestingVaultPDAs.public
+          ? getAccount(connection, vestingVaultPDAs.public)
+              .then((acc) => new BN(acc.amount.toString()))
+              .catch(() => new BN(0))
+          : new BN(0),
+        vestingVaultPDAs.team
+          ? getAccount(connection, vestingVaultPDAs.team)
+              .then((acc) => new BN(acc.amount.toString()))
+              .catch(() => new BN(0))
+          : new BN(0),
+        vestingVaultPDAs.foundation
+          ? getAccount(connection, vestingVaultPDAs.foundation)
+              .then((acc) => new BN(acc.amount.toString()))
+              .catch(() => new BN(0))
+          : new BN(0), // Added foundation vault
+        vestingVaultPDAs.ecosystem
+          ? getAccount(connection, vestingVaultPDAs.ecosystem)
+              .then((acc) => new BN(acc.amount.toString()))
+              .catch(() => new BN(0))
+          : new BN(0),
       ]);
 
       const adminBalance = recipientBalances[8];
-      const totalInVaults = vaultBalances[0].add(vaultBalances[1]).add(vaultBalances[2]).add(vaultBalances[3]);
-      const totalInRecipientAccounts = recipientBalances.slice(0, 8).reduce((sum, balance) => sum.add(balance), new BN(0));
+      const totalInVaults = vaultBalances[0]
+        .add(vaultBalances[1])
+        .add(vaultBalances[2])
+        .add(vaultBalances[3]); // Foundation vault added
+      const totalInRecipientAccounts = recipientBalances
+        .slice(0, 8)
+        .reduce((sum, balance) => sum.add(balance), new BN(0));
       const totalCirculating = totalInRecipientAccounts.add(totalInVaults).add(adminBalance);
 
       // Verify total supply consistency
@@ -738,52 +885,91 @@ describe('🚀 TGE Complete Distribution Test (Updated)', () => {
       console.log('✅ Total supply consistency verified: 1B tokens');
 
       // Calculate distributions
-      const totalImmediate = recipientBalances[0].add(recipientBalances[4]).add(recipientBalances[6]).add(recipientBalances[7]);
-      const totalVesting = recipientBalances[1].add(recipientBalances[2]).add(recipientBalances[3]).add(recipientBalances[5]);
+      const totalImmediate = recipientBalances[0]
+        .add(recipientBalances[4])
+        .add(recipientBalances[6])
+        .add(recipientBalances[7]); // Foundation added
+      const totalVesting = recipientBalances[1]
+        .add(recipientBalances[2])
+        .add(recipientBalances[3])
+        .add(recipientBalances[5]);
 
       console.log(`\n📈 Distribution Breakdown:`);
-      console.log(`  Total Immediate Allocations: ${totalImmediate.div(new BN('1000000000')).toString()}M`);
-      console.log(`  Total Vesting Released: ${totalVesting.div(new BN('1000000000')).toString()}M`);
+      console.log(
+        `  Total Immediate Allocations: ${totalImmediate.div(new BN('1000000000')).toString()}M`
+      );
+      console.log(
+        `  Total Vesting Released: ${totalVesting.div(new BN('1000000000')).toString()}M`
+      );
       console.log(`  Remaining in Vaults: ${totalInVaults.div(new BN('1000000000')).toString()}M`);
       console.log(`  Admin Remaining: ${adminBalance.div(new BN('1000000000')).toString()}M`);
     });
 
     it('✅ Should validate allocations after full vesting period', async () => {
       console.log('\n⏳ Waiting for all vesting schedules to complete...');
-      
+
       // Skip if schedules weren't created due to admin mismatch
-      if (!createdScheduleIds.public || !createdScheduleIds.ecosystem || !createdScheduleIds.partners || !createdScheduleIds.team) {
-        console.log('⚠️ Skipping final vesting validation - schedules not created due to admin mismatch');
+      if (
+        !createdScheduleIds.public ||
+        !createdScheduleIds.ecosystem ||
+        !createdScheduleIds.foundation ||
+        !createdScheduleIds.team
+      ) {
+        console.log(
+          '⚠️ Skipping final vesting validation - schedules not created due to admin mismatch'
+        );
         return;
       }
-      
+
       // 모든 베스팅이 끝나도록 충분히 대기 (42개월 + 여유분)
       await waitForTime(monthsToSeconds(ALLOCATION.TEAM_ADVISORS.TOTAL_MONTHS + 1));
       console.log('✅ All vesting periods completed');
 
       // 모든 스케줄을 다시 crank하여 잔액을 최신화
       console.log('\n🔄 Cranking all vesting schedules to completion...');
-      
-      const finalPublicTransferred = await crankVestingSchedule(createdScheduleIds.public, allTokenAccounts.publicVesting);
-      const finalEcosystemTransferred = await crankVestingSchedule(createdScheduleIds.ecosystem, allTokenAccounts.ecosystemVesting);
-      const finalPartnersTransferred = await crankVestingSchedule(createdScheduleIds.partners, allTokenAccounts.partners);
-      const finalTeamTransferred = await crankVestingSchedule(createdScheduleIds.team, allTokenAccounts.teamAdvisor);
+
+      const finalPublicTransferred = await crankVestingSchedule(
+        createdScheduleIds.public,
+        allTokenAccounts.publicVesting
+      );
+      const finalEcosystemTransferred = await crankVestingSchedule(
+        createdScheduleIds.ecosystem,
+        allTokenAccounts.ecosystemVesting
+      );
+      const finalFoundationTransferred = await crankVestingSchedule(
+        createdScheduleIds.foundation,
+        allTokenAccounts.foundation
+      ); // Changed to foundation
+      const finalTeamTransferred = await crankVestingSchedule(
+        createdScheduleIds.team,
+        allTokenAccounts.teamAdvisor
+      );
 
       console.log(`✅ Final crank completed:`);
-      console.log(`  Public: ${finalPublicTransferred.div(new BN('1000000000')).toString()}M additional tokens`);
-      console.log(`  Ecosystem: ${finalEcosystemTransferred.div(new BN('1000000000')).toString()}M additional tokens`);
-      console.log(`  Partners: ${finalPartnersTransferred.div(new BN('1000000000')).toString()}M additional tokens`);
-      console.log(`  Team: ${finalTeamTransferred.div(new BN('1000000000')).toString()}M additional tokens`);
+      console.log(
+        `  Public: ${finalPublicTransferred.div(new BN('1000000000')).toString()}M additional tokens`
+      );
+      console.log(
+        `  Ecosystem: ${finalEcosystemTransferred.div(new BN('1000000000')).toString()}M additional tokens`
+      );
+      console.log(
+        `  Foundation: ${finalFoundationTransferred.div(new BN('1000000000')).toString()}M additional tokens`
+      );
+      console.log(
+        `  Team: ${finalTeamTransferred.div(new BN('1000000000')).toString()}M additional tokens`
+      );
 
       // 이제 최종 백분율 검증 (목표치에 근접해야 함)
       console.log('\n📊 Final TGE allocation percentage validation...');
 
-      const publicTotal = (await getTokenBalance(allTokenAccounts.publicImmediate))
-        .add(await getTokenBalance(allTokenAccounts.publicVesting));
-      
-      const ecosystemTotal = (await getTokenBalance(allTokenAccounts.ecosystemImmediate))
-        .add(await getTokenBalance(allTokenAccounts.ecosystemVesting));
-      
+      const publicTotal = (await getTokenBalance(allTokenAccounts.publicImmediate)).add(
+        await getTokenBalance(allTokenAccounts.publicVesting)
+      );
+
+      const ecosystemTotal = (await getTokenBalance(allTokenAccounts.ecosystemImmediate)).add(
+        await getTokenBalance(allTokenAccounts.ecosystemVesting)
+      );
+
       const teamTotal = await getTokenBalance(allTokenAccounts.teamAdvisor);
       const partnersTotal = await getTokenBalance(allTokenAccounts.partners);
       const liquidityTotal = await getTokenBalance(allTokenAccounts.liquidity);
