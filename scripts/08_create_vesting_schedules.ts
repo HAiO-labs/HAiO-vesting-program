@@ -21,7 +21,7 @@ function loadVestingRecipients(tgeConfig: any) {
   const vaults = tgeConfig.multisigConfig.vaults;
 
   // Validate all required vaults exist
-  const requiredCategories = ['PUBLIC_ROUND', 'ECOSYSTEM', 'TEAM_ADVISORS', 'STRATEGIC_PARTNERS'];
+  const requiredCategories = ['PUBLIC_ROUND', 'ECOSYSTEM', 'TEAM_ADVISORS', 'FOUNDATION'];
   for (const category of requiredCategories) {
     if (!vaults[category]) {
       throw new Error(

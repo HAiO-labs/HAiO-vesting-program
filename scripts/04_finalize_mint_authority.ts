@@ -1,10 +1,5 @@
 import * as anchor from '@coral-xyz/anchor';
-import {
-  setAuthority,
-  AuthorityType,
-  getAccount,
-  getMint,
-} from '@solana/spl-token';
+import { setAuthority, AuthorityType, getAccount, getMint } from '@solana/spl-token';
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -12,8 +7,8 @@ import * as path from 'path';
 async function main() {
   console.log('🔒 Starting HAiO SPL Token Authority Finalization...');
   console.log('⚠️  This will PERMANENTLY disable SPL Token authorities!');
-  console.log('   - Mint Authority (토큰 발행 권한)');
-  console.log('   - Freeze Authority (계정 동결 권한)');
+  console.log('   - Mint Authority (Token minting authority)');
+  console.log('   - Freeze Authority (Account freeze authority)');
   console.log('ℹ️  Update Authority (메타데이터) will be handled separately in script 10');
 
   // Load TGE configuration
@@ -23,9 +18,11 @@ async function main() {
   }
 
   const tgeConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  
+
   if (tgeConfig.splTokenAuthoritiesDisabled) {
-    console.log('✅ SPL Token authorities already disabled. Token authorities are already finalized.');
+    console.log(
+      '✅ SPL Token authorities already disabled. Token authorities are already finalized.'
+    );
     return;
   }
 
@@ -40,17 +37,19 @@ async function main() {
   // Setup connection and wallet
   const cluster = tgeConfig.cluster || 'http://localhost:8899';
   const connection = new Connection(cluster, 'confirmed');
-  
-  const walletPath = process.env.ANCHOR_WALLET || path.join(process.env.HOME!, '.config/solana/keypairs/haio-deployer.json');
+
+  const walletPath =
+    process.env.ANCHOR_WALLET ||
+    path.join(process.env.HOME!, '.config/solana/keypairs/haio-deployer.json');
   const treasuryKeypair = Keypair.fromSecretKey(
     Buffer.from(JSON.parse(fs.readFileSync(walletPath, 'utf-8')))
   );
-  
+
   console.log('✅ Treasury wallet loaded:', treasuryKeypair.publicKey.toString());
 
   // Check current SPL Token authorities
   console.log('\n🔍 Checking current SPL Token authorities...');
-  
+
   const mintInfo = await getMint(connection, mint);
   console.log('   Current Mint Authority:', mintInfo.mintAuthority?.toString() || 'None');
   console.log('   Current Freeze Authority:', mintInfo.freezeAuthority?.toString() || 'None');
@@ -106,7 +105,9 @@ async function main() {
   console.log(`   💰 Remaining in treasury: ${remainingInTreasury.toLocaleString()} HAiO`);
 
   // Calculate totals using BigInt for precision
-  const totalAccountedForBig = BigInt(totalDistributed) * 10n ** BigInt(decimals) + BigInt(totalVested) * 10n ** BigInt(decimals);
+  const totalAccountedForBig =
+    BigInt(totalDistributed) * 10n ** BigInt(decimals) +
+    BigInt(totalVested) * 10n ** BigInt(decimals);
   const expectedTotalSupplyBig = BigInt(expectedTotalSupply) * 10n ** BigInt(decimals);
   const totalAccountedFor = Number(totalAccountedForBig) / 1e9;
   const distributionComplete = totalAccountedForBig === expectedTotalSupplyBig; // Exact match with BigInt
@@ -118,14 +119,20 @@ async function main() {
   console.log(`   Total Allocated: ${totalAccountedFor.toLocaleString()} HAiO`);
   console.log(`   Treasury Remaining: ${remainingInTreasury.toLocaleString()} HAiO`);
   console.log(`   Distribution Complete: ${distributionComplete ? '✅' : '❌'}`);
-  
+
   // Final confirmation
   console.log('\n⚠️  FINAL WARNING: These SPL Token actions are IRREVERSIBLE!');
   console.log('    🚫 Mint Authority: No more tokens can ever be minted');
   console.log('    🚫 Freeze Authority: No accounts can be frozen/unfrozen');
-  console.log('    Total token supply will be permanently fixed at', expectedTotalSupply.toLocaleString(), 'HAiO');
+  console.log(
+    '    Total token supply will be permanently fixed at',
+    expectedTotalSupply.toLocaleString(),
+    'HAiO'
+  );
   console.log('    This provides significant decentralization and user protection.');
-  console.log('ℹ️  Note: Update Authority for metadata will remain for now (use script 10 to remove later)');
+  console.log(
+    'ℹ️  Note: Update Authority for metadata will remain for now (use script 10 to remove later)'
+  );
 
   console.log('\n🔒 Proceeding with SPL Token authority removal...');
 
@@ -200,16 +207,16 @@ async function main() {
       vestingAllocation: totalVested,
       crankedTokens: totalCranked,
       treasuryRemaining: remainingInTreasury,
-      
+
       // SPL Token Authority status
       splTokenAuthoritiesRemoved: {
         mintAuthority: !!removedAuthorities.mintAuthority,
         freezeAuthority: !!removedAuthorities.freezeAuthority,
       },
-      
+
       // Transactions
       transactions: removedAuthorities,
-      
+
       // Status
       distributionComplete: distributionComplete,
       splTokenDecentralized: true,
@@ -226,7 +233,6 @@ async function main() {
     console.log('   ✅ No minting control possible');
     console.log('   ✅ No freeze control possible');
     console.log('   ⏳ Update Authority remains (remove with script 10 when ready)');
-    
   } catch (error) {
     console.error('❌ Failed to remove SPL Token authorities:', error);
     throw error;
@@ -236,4 +242,4 @@ async function main() {
 main().catch((err) => {
   console.error('❌ Error:', err);
   process.exit(1);
-}); 
+});
