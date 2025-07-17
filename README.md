@@ -7,7 +7,7 @@ Production-ready Solana program for HAiO token vesting and distribution manageme
 ## Overview
 
 The **HAiO Vesting Program** is a secure, decentralised solution for managing token-vesting schedules on Solana.  
-It enables time-based token releases with cliff periods, linear vesting, and automated distribution to a central hub for final beneficiary distribution.
+It enables time-based token releases with cliff periods, linear vesting, and automated distribution to a designated recipient wallet (e.g., multi-sig vault) for final beneficiary distribution.
 
 ---
 
@@ -26,28 +26,29 @@ It enables time-based token releases with cliff periods, linear vesting, and aut
 ## Architecture
 
 ```text
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Admin Wallet  │    │  Vesting Vault   │    │ Distribution    │
-│                 │───▶│  (Per Schedule)  │───▶│ Hub             │
-│ Creates/Manages │    │                  │    │                 │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
+┌─────────────────┐    ┌──────────────────┐    ┌────────────────────────┐
+│   Admin Wallet  │    │  Vesting Vault   │    │ Recipient Wallet       │
+│                 │───▶│  (Per Schedule)  │───▶│ (Multi-sig, Category) │
+│ Creates/Manages │    │                  │    │                        │
+└─────────────────┘    └──────────────────┘    └────────────────────────┘
          │                       │                       │
          ▼                       ▼                       ▼
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│ Program Config  │    │ Vesting Schedule │    │ Token Recipients│
-│ (Global State)  │    │ (Individual)     │    │                 │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
+┌─────────────────┐    ┌──────────────────┐    ┌────────────────────────┐
+│ Program Config  │    │ Vesting Schedule │    │ Token Recipients      │
+│ (Global State)  │    │ (Individual)     │    │                        │
+└─────────────────┘    └──────────────────┘    └────────────────────────┘
 ```
 
 ---
 
 ## Core Components
 
-| Component           | Description                           | PDA Seeds                           |
-| ------------------- | ------------------------------------- | ----------------------------------- |
-| **ProgramConfig**   | Global program state & admin controls | `["program_config"]`                |
-| **VestingSchedule** | Individual vesting-schedule data      | `["vesting_schedule", schedule_id]` |
-| **VestingVault**    | Token storage for each schedule       | `["vesting_vault", schedule_id]`    |
+| Component            | Description                           | PDA Seeds                           |
+| -------------------- | ------------------------------------- | ----------------------------------- |
+| **ProgramConfig**    | Global program state & admin controls | `["program_config"]`                |
+| **VestingSchedule**  | Individual vesting-schedule data      | `["vesting_schedule", schedule_id]` |
+| **VestingVault**     | Token storage for each schedule       | `["vesting_vault", schedule_id]`    |
+| **Recipient Wallet** | Final recipient (multi-sig vault)     | (Not a PDA, actual wallet address)  |
 
 ---
 
@@ -55,16 +56,16 @@ It enables time-based token releases with cliff periods, linear vesting, and aut
 
 ### Access Control
 
-- **Admin-only** — schedule creation, hub management
+- **Admin-only** — schedule creation, recipient wallet management
 - **Permissionless** — vesting execution (crank)
 
 ### Timelock Protection
 
-- 48-hour delay for hub-address changes
+- 48-hour delay for recipient wallet address changes (if applicable)
 
 ### Validation Layers
 
-1. **Account Verification** — mint, vault & hub consistency
+1. **Account Verification** — mint, vault & recipient consistency
 2. **Math Safety** — overflow checks on all calculations
 3. **Concurrency Guards** — double-spend prevention
 4. **State Integrity** — strict parameter validation
@@ -97,7 +98,7 @@ yarn install
 anchor build
 
 # Run tests
-anchor test
+RUSTFLAGS="--cfg feature=\"test-utils\"" anchor test
 
 # Deploy (devnet)
 anchor deploy --provider.cluster devnet
@@ -135,7 +136,7 @@ anchor deploy \
   --program-keypair target/deploy/haio_vesting-keypair.json
 
 # 5. Initialise program
-node scripts/initialize.js --cluster mainnet
+yarn initialize-program
 
 # 6. Verify
 anchor verify --provider.cluster mainnet <PROGRAM_ID>
@@ -155,7 +156,7 @@ solana program set-upgrade-authority <PROGRAM_ID> --final
 
 ## Usage Guide
 
-### 1 · Initialise Program
+### 1 · Initialize Program
 
 ```typescript
 import * as anchor from '@coral-xyz/anchor';
@@ -166,75 +167,57 @@ const program = anchor.workspace.HaioVesting as Program<HaioVesting>;
 
 await program.methods
   .initialize()
-  .accounts({
+  .accountsPartial({
     admin: adminKeypair.publicKey,
     programConfig: programConfigPDA,
     systemProgram: anchor.web3.SystemProgram.programId,
   })
-  .signers([adminKeypair])
   .rpc();
 ```
 
-### 2 · Set Distribution Hub
-
-```typescript
-await program.methods
-  .updateDistributionHub(distributionHub)
-  .accounts({
-    admin: adminKeypair.publicKey,
-    programConfig: programConfigPDA,
-  })
-  .signers([adminKeypair])
-  .rpc();
-```
-
-### 3 · Create Vesting Schedule
+### 2 · Create Vesting Schedule
 
 ```typescript
 const scheduleParams = {
-  totalAmount: new BN(1_000_000 * 10 ** 9), // 1 M tokens
-  cliffTimestamp: new BN(Date.now() / 1000 + 86400 * 30), // 30 days
-  vestingStartTimestamp: new BN(Date.now() / 1000 + 86400 * 30),
-  vestingEndTimestamp: new BN(Date.now() / 1000 + 86400 * 365), // 1 year
-  sourceCategory: { team: {} },
+  recipient: recipientPubkey,
+  recipientTokenAccount: recipientTokenAccountAddress,
+  totalAmount: new anchor.BN(amount),
+  cliffTimestamp: new anchor.BN(cliffTimestamp),
+  vestingStartTimestamp: new anchor.BN(vestingStartTimestamp),
+  vestingEndTimestamp: new anchor.BN(vestingEndTimestamp),
+  sourceCategory: { team: {} }, // or other category
 };
 
 await program.methods
-  .createVestingSchedule(scheduleId, scheduleParams)
-  .accounts({
+  .createVestingSchedule(new anchor.BN(scheduleId), scheduleParams)
+  .accountsPartial({
     admin: adminKeypair.publicKey,
     programConfig: programConfigPDA,
     vestingSchedule: vestingSchedulePDA,
     mint: tokenMint,
     depositorTokenAccount: adminTokenAccount,
+    recipientTokenAccount: recipientTokenAccountAddress,
     vestingVault: vestingVaultPDA,
     systemProgram: anchor.web3.SystemProgram.programId,
     tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
     rent: anchor.web3.SYSVAR_RENT_PUBKEY,
   })
-  .signers([adminKeypair])
   .rpc();
 ```
 
-### 4 · Execute Vesting (Crank)
+### 3 · Execute Vesting (Crank)
 
 ```typescript
 await program.methods
-  .crankVestingSchedules(5) // up to 5 schedules
-  .accounts({
+  .crankVestingSchedule()
+  .accountsPartial({
     programConfig: programConfigPDA,
-    distributionHubTokenAccount: hubTokenAccount,
+    vestingSchedule: vestingSchedulePDA,
+    vestingVault: vestingVaultPDA,
+    recipientTokenAccount: recipientTokenAccount,
     mint: tokenMint,
     tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
   })
-  .remainingAccounts([
-    // [schedule, vault] pairs
-    { pubkey: sched1PDA, isWritable: true, isSigner: false },
-    { pubkey: vault1PDA, isWritable: true, isSigner: false },
-    { pubkey: sched2PDA, isWritable: true, isSigner: false },
-    { pubkey: vault2PDA, isWritable: true, isSigner: false },
-    // …
-  ])
   .rpc();
 ```
 
@@ -242,11 +225,19 @@ await program.methods
 
 ## Operational Scripts
 
-| Task                    | Script                                                                     |
-| ----------------------- | -------------------------------------------------------------------------- |
-| Token creation          | `node scripts/01_create_token.js  --cluster mainnet --supply 1000000000`   |
-| Batch schedule creation | `node scripts/02_create_vesting_schedules.js --config vesting-config.json` |
-| Automated crank runner  | `node scripts/03_run_crank.js --interval 3600000`                          |
+| Task                    | Script Command                    |
+| ----------------------- | --------------------------------- |
+| Token creation          | `yarn create-token`               |
+| Batch schedule creation | `yarn create-vesting`             |
+| Automated crank runner  | `yarn run-crank`                  |
+| Token metadata          | `yarn create-token-metadata`      |
+| On-chain metadata       | `yarn create-onchain-metadata`    |
+| Finalize mint authority | `yarn finalize-mint-authority`    |
+| Initialize multisig ATA | `yarn initialize-multisig-ata`    |
+| Immediate distribution  | `yarn immediate-distribution`     |
+| Finalize upgrade auth   | `yarn finalize-upgrade-authority` |
+| Remove update authority | `yarn remove-update-authority`    |
+| Test crank              | `yarn test-crank`                 |
 
 ---
 
@@ -289,7 +280,7 @@ await program.methods
 // Program health
 const cfg = await program.account.programConfig.fetch(configPDA);
 console.log(`Schedules: ${cfg.totalSchedules}`);
-console.log(`Hub:       ${cfg.distributionHub}`);
+console.log(`Recipient Wallet: ${cfg.recipientWallet}`);
 
 // Per schedule
 const sch = await program.account.vestingSchedule.fetch(schedulePDA);
@@ -308,13 +299,13 @@ console.log(`Progress: ${(sch.amountTransferred / sch.totalAmount) * 100}%`);
 
 ## Troubleshooting
 
-| Error                     | Cause                  | Fix                                |
-| ------------------------- | ---------------------- | ---------------------------------- |
-| `DistributionHubNotSet`   | Hub not configured     | Call `updateDistributionHub` first |
-| `TimelockNotExpired`      | Hub update too soon    | Wait 48 h                          |
-| `ScheduleIdConflict`      | Duplicate schedule ID  | Use `totalSchedules` counter       |
-| `MintMismatch`            | Wrong token mint       | Verify all accounts                |
-| `HubAccountOwnerMismatch` | Hub ATA owner mismatch | Ensure ATA owned by hub            |
+| Error                        | Cause                     | Fix                                |
+| ---------------------------- | ------------------------- | ---------------------------------- |
+| `RecipientWalletNotSet`      | Recipient not configured  | Call `updateRecipientWallet` first |
+| `TimelockNotExpired`         | Wallet update too soon    | Wait 48 h                          |
+| `ScheduleIdConflict`         | Duplicate schedule ID     | Use `totalSchedules` counter       |
+| `MintMismatch`               | Wrong token mint          | Verify all accounts                |
+| `WalletAccountOwnerMismatch` | Wallet ATA owner mismatch | Ensure ATA owned by wallet         |
 
 ```bash
 # Debug mode
@@ -349,9 +340,9 @@ anchor test --skip-deploy -- --nocapture
 ### Tests
 
 ```bash
-anchor test               # full suite
-anchor test tests/haio-vesting.ts
-anchor test --coverage
+RUSTFLAGS="--cfg feature=\"test-utils\"" anchor test               # full suite
+RUSTFLAGS="--cfg feature=\"test-utils\"" anchor test tests/haio-vesting.ts
+RUSTFLAGS="--cfg feature=\"test-utils\"" anchor test --coverage
 ```
 
 ### Lint & Format
@@ -367,12 +358,12 @@ yarn prettier --write "**/*.{ts,js,json}"
 
 ### Instructions
 
-| Name                    | Purpose                    | Authority |
-| ----------------------- | -------------------------- | --------- |
-| `initialize`            | Configure program          | Admin     |
-| `createVestingSchedule` | Add vesting schedule       | Admin     |
-| `crankVestingSchedules` | Execute vested releases    | Anyone    |
-| `updateDistributionHub` | Propose/execute hub change | Admin     |
+| Name                    | Purpose                       | Authority |
+| ----------------------- | ----------------------------- | --------- |
+| `initialize`            | Configure program             | Admin     |
+| `createVestingSchedule` | Add vesting schedule          | Admin     |
+| `crankVestingSchedules` | Execute vested releases       | Anyone    |
+| `updateRecipientWallet` | Propose/execute wallet change | Admin     |
 
 ### Account Structures
 
@@ -382,9 +373,9 @@ yarn prettier --write "**/*.{ts,js,json}"
 ```rust
 pub struct ProgramConfig {
     pub admin: Pubkey,
-    pub distribution_hub: Pubkey,
-    pub pending_hub: Option<Pubkey>,
-    pub hub_update_timelock: Option<i64>,
+    pub recipient_wallet: Pubkey,
+    pub pending_wallet: Option<Pubkey>,
+    pub wallet_update_timelock: Option<i64>,
     pub total_schedules: u64,
     pub bump: u8,
 }
@@ -419,8 +410,8 @@ pub struct VestingSchedule {
 - `ProgramInitialized`
 - `VestingScheduleCreated`
 - `TokensReleased`
-- `DistributionHubUpdateProposed`
-- `DistributionHubUpdated`
+- `RecipientWalletUpdateProposed`
+- `RecipientWalletUpdated`
 
 ---
 
