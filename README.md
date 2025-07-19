@@ -16,7 +16,7 @@ It enables time-based token releases with cliff periods, linear vesting, and aut
 - ✅ **Multi-schedule Support**&nbsp;— create unlimited vesting schedules with individual parameters
 - ✅ **Flexible Vesting**&nbsp;— cliff periods **+** linear vesting with custom timelines
 - ✅ **Permissionless Execution**&nbsp;— anyone can trigger releases via a crank mechanism
-- ✅ **Security First**&nbsp;— admin controls, timelocks, comprehensive validation
+- ✅ **Security First**&nbsp;— Features immutable schedules where even admins cannot alter deployed vesting rules
 - ✅ **Source Tracking**&nbsp;— categorise schedules by funding source for transparency
 - ✅ **Concurrent Safe**&nbsp;— protection against double-spending & race conditions
 - ✅ **Gas Optimised**&nbsp;— efficient batch processing with compute-unit estimation
